@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+	<style>
+	table {
+		font-family: arial, sans-serif;
+		border-collapse: collapse;
+		width: 100%;
+	}
+
+	td, th {
+		border: 1px solid #dddddd;
+		text-align: left;
+		padding: 8px;
+	}
+	</style>
+ <head>
+  <meta charset="UTF-8">
+  <meta name="Generator" content="EditPlus®">
+  <meta name="Author" content="">
+  <meta name="Keywords" content="">
+  <meta name="Description" content="">
+  <script type="text/javascript" src="js/unicornFeedback.js"></script>
+  <script src="js/config.js"></script>
+  <title>Enter Feedback</title>
+ </head>
+ <body>
+ <h2>Voice of the Customer application</h2>
+  		<div class="w3-row-padding">
+			<div id="content-refresh">
+			 <form >
+			  First name: <input type="text" name="fname"><br>
+			  Last name: <input type="text" name="lname"><br>
+			  Feedback: <textarea rows="4" cols="50" name="feedback"></textarea>
+              <br>
+			  <input type="button" value="Submit" onClick="submitFeedback(this.form)">
+              <input type="button" value="Cancel" onClick="window.location.replace('unicornfeedback.html')">
+			</form> 
+			
+			</div>
+		</div>
+ </body>
+</html>
