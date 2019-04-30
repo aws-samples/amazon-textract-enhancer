@@ -53,7 +53,7 @@ def GetDocumentAnalysisResult(textract, jobId):
     
     return result
 
-#Function to extarct table information from the raw JSON returned by Textract
+#Function to extract table information from the raw JSON returned by Textract
 def extractTableBlocks(json):
     blocks = {}
     for block in json:
@@ -200,6 +200,121 @@ def prettify(elem):
     reparsed = minidom.parseString(rough_string)
     return reparsed.toprettyxml(indent="  ")    
 
+#Function to group all block elements from textract response by type
+def groupBlocksByType(responseBlocks):
+    blocks = {}
+
+    for block in responseBlocks:
+        blocktype = block['BlockType']
+        if blocktype not in blocks.keys():
+            blocks[blocktype] = [block]
+        else:
+            blocks[blocktype].append(block)
+    print("Extracted Block Types:")
+    for blocktype in blocks.keys():
+        print("                       {} = {}".format(blocktype, len(blocks[blocktype])))
+    return blocks
+
+#Function to extract all key value pair blocks from textract response
+def extractKeyValuePairs(blocks):
+
+    keyValuePairs = blocks['KEY_VALUE_SET']
+    formKeys = {}
+    formValues = {}
+    for pair in keyValuePairs:
+                                        
+        if pair['EntityTypes'][0] == 'KEY':
+            
+            if pair["Id"] not in formKeys.keys():
+                formKeys[pair["Id"]] = {
+                                            "BoundingBox": pair["Geometry"]["BoundingBox"],
+                                            "Polygon": pair["Geometry"]["Polygon"]
+                                        }
+            else:
+                formKeys[pair["Id"]]["BoundingBox"] = pair["Geometry"]["BoundingBox"]               
+                formKeys[pair["Id"]]["Polygon"] = pair["Geometry"]["Polygon"]
+                
+            for relationShip in pair['Relationships']:
+                if relationShip['Type'] == "CHILD":
+                    if pair["Id"] not in formKeys.keys():
+                        formKeys[pair["Id"]] = {"CHILD": relationShip["Ids"]}
+                    else:
+                        formKeys[pair["Id"]]["CHILD"] = relationShip["Ids"]
+                elif relationShip['Type'] == "VALUE":
+                    if pair["Id"] not in formKeys.keys():
+                        formKeys[pair["Id"]] = {"VALUE": relationShip["Ids"][0]}
+                    else:
+                        formKeys[pair["Id"]]["VALUE"] = relationShip["Ids"][0]                    
+        elif pair['EntityTypes'][0] == 'VALUE':
+            
+            if pair["Id"] not in formKeys.keys():
+                formValues[pair["Id"]] = {
+                                            "BoundingBox": pair["Geometry"]["BoundingBox"],
+                                            "Polygon": pair["Geometry"]["Polygon"]
+                                        }
+            else:
+                formValues[pair["Id"]]["BoundingBox"] = pair["Geometry"]["BoundingBox"]               
+                formValues[pair["Id"]]["Polygon"] = pair["Geometry"]["Polygon"]
+                
+            if pair["Id"] not in formValues.keys():
+                formValues[pair["Id"]] = {}
+            if "Relationships" in pair.keys():
+                for relationShip in pair['Relationships']:
+                    if relationShip['Type'] == "CHILD":
+                        if pair["Id"] not in formValues.keys():
+                            formValues[pair["Id"]] = {"CHILD": relationShip["Ids"]}
+                        else:
+                            formValues[pair["Id"]]["CHILD"] = relationShip["Ids"]                    
+
+    return formKeys, formValues
+
+#Function to extract all words from textract response
+def extractWords(blocks):
+    wordBlocks = blocks['WORD']
+    pageWords = {}
+    for wordBlock in wordBlocks:   
+        
+        if wordBlock["Id"] not in pageWords.keys():
+            pageWords[wordBlock["Id"]] = {
+                                            "Text": wordBlock["Text"], 
+                                            "BoundingBox": wordBlock["Geometry"]["BoundingBox"],
+                                            "Polygon": wordBlock["Geometry"]["Polygon"]
+                                        }
+        else:
+            pageWords[wordBlock["Id"]]["Text"] = wordBlock["Text"]        
+            pageWords[wordBlock["Id"]]["BoundingBox"] = wordBlock["Geometry"]["BoundingBox"]
+            pageWords[wordBlock["Id"]]["Polygon"] = wordBlock["Geometry"]["Polygon"]
+    return pageWords
+
+#Function to create a dictionary JSON containing the key value pairs as identified by parsing the textract response
+def generateFormEntries(formKeys, formValues, pageWords):
+    
+    formEntries = {}
+    count = 0
+    for formKey in formKeys.keys():        
+            
+        keyText = ""
+        if "CHILD" in formKeys[formKey].keys():
+            keyTextKeys = formKeys[formKey]['CHILD']
+            for textKey in keyTextKeys:
+                keyText = keyText + " " + pageWords[textKey]["Text"]
+        key = formKeys[formKey]['VALUE']
+
+        valueText = ""
+        if "CHILD" in formValues[key].keys():
+            valueTextKeys = formValues[key]["CHILD"]
+            for textKey in valueTextKeys:
+                if textKey in pageWords.keys():
+                    valueText = valueText + " " + pageWords[textKey]["Text"]
+
+        if keyText != "":
+            count = count + 1
+            if keyText not in formEntries.keys(): 
+                formEntries[keyText] = [valueText]
+            else:
+                formEntries[keyText].append(valueText)
+    return collections.OrderedDict(sorted(formEntries.items()))
+
 def attachExternalBucketPolicy(externalBucketName):
     iam = boto3.client('iam')
     roleName = os.environ['role_name']
@@ -209,8 +324,7 @@ def attachExternalBucketPolicy(externalBucketName):
     policyAttached = False
     
     targetPolicy = None
-    policies = iam.list_policies(
-    
+    policies = iam.list_policies(    
         MaxItems=1000
     )['Policies']
     for policy in policies:
@@ -242,18 +356,17 @@ def attachExternalBucketPolicy(externalBucketName):
                                         "Effect": "Allow",\
                                         "Action": [\
                                             "s3:ListBucket",\
-                                            "s3:ListBucketVersions",\
-                                            "s3:GetObject",\
-                                            "s3:GetObjectVersion"\
+                                            "s3:ListBucketVersions"\
                                         ],\
                                         "Resource": [\
-                                            "arn:aws:s3:::'+externalBucketName+'",\
-                                            "arn:aws:s3:::'+externalBucketName+'/*"\
+                                            "arn:aws:s3:::'+externalBucketName+'"\
                                         ]\
                                     },\
                                     {\
                                         "Effect": "Allow",\
                                         "Action": [\
+                                            "s3:GetObject",\
+                                            "s3:GetGetObjectVersionObject",\
                                             "s3:PutObject",\
                                             "s3:PutObjectAcl"\
                                         ],\
@@ -440,6 +553,20 @@ def lambda_handler(event, context):
     if documentBlocks is not None:
         print("{} Blocks retrieved".format(len(documentBlocks)))
 
+        #Extract form fields into a Python dictionary by parsing the raw JSON from Textract
+        blocks = groupBlocksByType(documentBlocks)
+        formKeys, formValues = extractKeyValuePairs(blocks)
+        pageWords = extractWords(blocks)
+
+        #Generate JSON document using form fields information  
+        formEntries = generateFormEntries(formKeys, formValues, pageWords)   
+
+        json_document = "{}.json".format(document_name)
+        json_file = open("/tmp/"+json_document,'w+')
+        json_file.write(json.dumps(formEntries, indent=4, sort_keys=True))
+        json_file.close()
+        s3.meta.client.upload_file("/tmp/"+json_document, bucket, "{}/{}".format(upload_prefix,json_document)) 
+
         #Extract table information  into a Python dictionary by parsing the raw JSON from Textract
         tabledict = extractTableBlocks(documentBlocks)
         
@@ -455,7 +582,6 @@ def lambda_handler(event, context):
                 html_file.close()
                 s3.meta.client.upload_file("/tmp/"+html_document, bucket, "{}/{}".format(upload_prefix,html_document))            
            
-    
     s3_result = s3.meta.client.list_objects_v2(Bucket=bucket, Prefix="{}/".format(upload_prefix), Delimiter = "/")
     if 'Contents' in s3_result:
         
@@ -471,18 +597,28 @@ def lambda_handler(event, context):
             print("List count = {len(file_list)}")
     print(file_list)   
     
-    jsontables = {}
-    jsontables['tables'] = []
+    jsonresponse = {}
+    jsonresponse['tables'] = []
     for s3file in file_list:
-        file_handle = s3file[s3file.find(bucket)+len(bucket)+1:]
-        s3_object = s3.Object(bucket,file_handle)
-        s3_response = s3_object.get()
-        xmlstring = s3_response['Body'].read()
-        
-        tablexml = ElementTree.fromstring(xmlstring)
-        jsontables['tables'].append(etree_to_dict(tablexml))
-    
+        if s3file.endswith("html"):
+            file_handle = s3file[s3file.find(bucket)+len(bucket)+1:]
+            s3_object = s3.Object(bucket,file_handle)
+            s3_response = s3_object.get()
+            xmlstring = s3_response['Body'].read()
+            
+            tablexml = ElementTree.fromstring(xmlstring)
+            jsonresponse['tables'].append(etree_to_dict(tablexml))
+
+        if s3file.endswith("json"):
+            file_handle = s3file[s3file.find(bucket)+len(bucket)+1:]
+            s3_object = s3.Object(bucket,file_handle)
+            s3_response = s3_object.get()
+            jsonstring = s3_response['Body'].read()
+
+            formjson = json.loads(jsonstring)
+            jsonresponse['formfields'].append(jsonstring)
+
     if bucketAccessPolicyArn is not None:
         detachExternalBucketPolicy(bucketAccessPolicyArn, event)
         
-    return jsontables
+    return jsonresponse

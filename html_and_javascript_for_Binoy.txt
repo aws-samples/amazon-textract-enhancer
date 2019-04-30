@@ -1,0 +1,278 @@
+<center>
+<img src="http://shreyasdemos.ml/wp-content/uploads/2019/01/textractdemo.png" alt="" width="60%" class="alignnone size-full wp-image-249" />
+</center>
+
+<h3>Step 1. Upload local PDF file</h3>
+<input type="file" onchange="previewFile()"/>
+
+<iframe id="img2" alt="PDF preview..." src="" width="100%" height="400"></iframe>
+
+<h3>Step 2. Start the Textract process by sending document to S3</h3>
+(Wait for button to say "Done")
+<button type="button" class="buttonz button2">Send to S3</button>
+
+<h3>Step 3. Select table to view </h3>
+<div style="width:200px;"><select id="options" onchange="changeval()"> </select></div>
+<div id="container11" style="overflow-x:auto;overflow-x:auto;height:400px;"></div>
+
+<h3>Step 4. Query selected table</h3>
+(<a href="https://github.com/agershun/alasql/wiki/Sql">AlaSQL</a> syntax)
+<br>
+<input id="querytext"  type="text" value="SELECT * FROM ?"></input>
+<br>
+<button type="button" class="buttony button4">Query Table</button>
+
+<div id="container22" style="overflow-x:auto;overflow-x:auto;height:400px;"></div>
+
+
+-----------------------------------------------------------------------------------
+
+JAVASCRIPT
+
+var data = "";
+function previewFile() {
+  var preview = document.getElementById('img2');
+  var file = document.querySelector('input[type=file]').files[0];
+  var reader = new FileReader();
+  console.log(file.type);
+  console.log(file)
+  // when user select an image, `reader.readAsDataURL(file)` will be triggered
+  // reader instance will hold the result (base64) data
+  // next, event listener will be triggered and we call `reader.result` to get
+  // the base64 data and replace it with the image tag src attribute
+  reader.addEventListener("load", function() {
+    console.log(file.type);
+	
+    preview.src = reader.result;
+	//preview.setAttribute('style', 'width:50%;');
+	//preview.setAttribute('style', 'height:auto;');  
+    console.log('after preview');
+	//data = reader.readAsDataURL(file);
+	data = file;
+	//console.log(reader.result); // this is where the data is
+	//console.log(data);
+  }, false);
+
+  if (file) {
+    console.log('inside if');
+    reader.readAsDataURL(file);
+	
+  } else {
+    console.log('inside else');
+  }
+
+
+}
+
+
+
+
+
+
+var tabledata;
+$('.buttonz').on('click', function() {
+  
+// Initialize the Amazon Cognito credentials provider
+AWS.config.region = 'us-east-1'; // Region
+AWS.config.credentials = new AWS.CognitoIdentityCredentials({
+    IdentityPoolId: 'us-east-1:78382418-c726-45f9-9415-6ad97790d50f',
+});
+	
+// Change button to loading	
+  var $this = $(this);
+  $this.text('loading...');
+  $this.prop("disabled", true);
+
+	
+var params = {   
+ Body:data, 
+ Bucket: "lambda-textract-demo",
+ Key: "example.pdf",
+ ContentType: "application/pdf",
+ ContentEncoding:'base64',
+};  
+
+var s3 = new AWS.S3();
+	
+s3.putObject(params, function(err, data) {    
+if (err) 
+ console.log(err, err.stack); // an error occurred    
+else     
+ console.log("success, added file to s3");           // successful response    /*    
+data = {
+ ETag: "\"6805f2cfc46c0f04559748bb039d69ae\"",
+ ServerSideEncryption: "AES256",
+ VersionId: "Ri.vC6qVlA4dEnjgRV4ZHsHoFIjqEMNt"
+};
+});
+
+setTimeout(function()
+    {
+    $this.text('Uploaded to S3...');
+    $this.prop("disabled", true);
+	callTextractAPI($this);
+    }, 2000);
+  
+	
+  	
+	
+});
+
+
+function callTextractAPI($this)
+{
+	console.log("Calling Textract API");
+    $this.text("Calling Textract API...");
+    $this.prop("disabled", true);
+	
+   // Prepare to call Lambda function
+	var lambda = new AWS.Lambda({region: 'us-east-1'});
+   var pullParams = {
+      FunctionName : 'lambda-textract-demo-stac-TextractDocumentAnalyzer-60CZETW7NJ7',
+      InvocationType : 'RequestResponse',
+      LogType : 'None',
+	   Payload : '{"ExternalBucketName": "lambda-textract-demo","ExternalDocumentPrefix": "example.pdf"}'
+   };
+	
+   lambda.invoke(pullParams, function(err, data) {
+         if (err) {
+            prompt(err);
+         } else {
+			
+			 $this.text('Parsing Table & Form results...');
+             $this.prop("disabled", true);
+			 
+            pullResults = JSON.parse(data.Payload);
+            //console.log(pullResults);
+			console.log(pullResults['tables']);
+			 
+			var tablement = document.getElementById("container11"); 
+			var selectement = document.getElementById("options"); 
+			
+			var numtables = Object.keys(pullResults["tables"]).length;
+			console.log("Number of tables found = " + numtables);
+			
+			 if(numtables > 0){
+			tablement.innerHTML = pullResults["tables"]["0"]["html"];
+		    tabledata = pullResults;
+				 
+			// fill out options
+				var opt; 
+				 for(var i=0; i<numtables; i++)
+				 {
+					 opt = document.createElement('option');
+					 opt.value = i;
+					 opt.innerHTML = "Table "+i;
+					 selectement.appendChild(opt);
+					 
+				 }
+			 }
+			$this.text('Done!');
+            $this.prop("disabled", true);
+			 
+			
+         }
+      });
+}
+
+
+function changeval() {
+    d = document.getElementById("options").value;
+	console.log("selected table "+d.toString());
+	document.getElementById("container11").innerHTML = pullResults["tables"][d.toString()]["html"]; 
+}
+
+$('.buttony').on('click', function(){
+
+	// get data from selected table	
+var tempdata = tabledata["tables"][document.getElementById("options").value]["table"]["tr"];
+
+var headers = tempdata[0];
+	for (var i=0; i<headers["td"].length; i++){
+		if(headers["td"][i] == null){
+			headers["td"][i] = "Column" + i;
+		}
+	}
+
+var mydata = [];
+
+var numrows = tempdata.length;
+var numcols = headers["td"].length;
+	
+	for (var i=0;i<numrows;i++){
+		mydata[i] = {};
+		for (var j=0;j<numcols; j++){
+			
+			mydata[i][headers["td"][j].replace(/ +?/g, '')] = tempdata[i]["td"][j];
+		}
+		
+	}
+	
+
+var data = [{a:1,b:10}, {a:2,b:20}, {a:1,b:30}];
+var res = alasql(document.getElementById('querytext').value,[mydata]);
+console.log("Raw data");
+console.log(data);
+console.log(mydata);	
+console.log("DATA FROM ALASQL QUERY");
+console.log(res);
+	
+var container22 = document.getElementById('container22');
+	
+	try{
+		var ttt = document.getElementById('table22');
+		ttt.parentNode.removeChild(ttt);
+	} catch(err) {
+		console.log("nothing to remove");
+	}
+var table22 = document.createElement('table');
+table22.setAttribute("id","table22");
+
+
+
+container22.appendChild(table22);
+var newnumcols = Object.keys(res[1]).length;
+var newheaders = Object.keys(res[1]);
+console.log("new num cols = "+newnumcols);
+	
+	
+var tr, td;
+
+	for(i=0;i<res.length;i++){
+		tr = document.createElement('tr');
+		table22.appendChild(tr);
+		
+		for(j=0;j<newnumcols;j++){
+    		td = document.createElement('td');
+    		tr.appendChild(td);
+			
+			if(i==0){ //for header row
+				td.innerHTML = newheaders[j];
+			} else {
+				td.innerHTML = res[i][newheaders[j]];
+				
+			}
+			
+			
+		}
+		
+	}
+
+
+
+	
+	
+
+});
+
+
+
+
+
+
+
+
+
+
+
+

@@ -253,7 +253,7 @@
                 }
             }
         },
-        "LambdaInvokeBucketPermission": {
+        "LambdaInvokeS3Permission": {
             "Type": "AWS::Lambda::Permission",
             "DependsOn": "TextractDocumentAnalyzerFunction",
             "Properties": {
@@ -266,7 +266,7 @@
         },
         "DocumentBucket": {
             "Type": "AWS::S3::Bucket",
-            "DependsOn": "LambdaInvokeBucketPermission",
+            "DependsOn": "LambdaInvokeS3Permission",
             "Condition": "NewDocumentBucketCreation",          
             "Properties": {
                 "BucketName" : {"Fn::Join": ["-", [{"Ref": "AWS::AccountId"}, {"Ref": "DocumentBucketName"}]]},                
@@ -472,7 +472,7 @@
                 }
             }
         },
-        "EnterCustomerFeedbackLambdaPermission": {
+        "LambdaInvokeAPIPermission": {
             "Type": "AWS::Lambda::Permission",
             "DependsOn": "TextractDemoAPI",
             "Properties": {
