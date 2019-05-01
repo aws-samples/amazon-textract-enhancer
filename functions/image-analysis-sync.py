@@ -7,6 +7,7 @@ from io import BytesIO
 from xml.dom import minidom
 from xml.etree import ElementTree
 from collections import defaultdict
+from collections import OrderedDict 
 from xml.etree.ElementTree import Element, SubElement, Comment, tostring
 
 #Function to retrieve result of completed analysis job
@@ -313,7 +314,7 @@ def generateFormEntries(formKeys, formValues, pageWords):
                 formEntries[keyText] = [valueText]
             else:
                 formEntries[keyText].append(valueText)
-    return collections.OrderedDict(sorted(formEntries.items()))
+    return OrderedDict(sorted(formEntries.items()))
 
 def attachExternalBucketPolicy(externalBucketName):
     iam = boto3.client('iam')
@@ -616,7 +617,7 @@ def lambda_handler(event, context):
             jsonstring = s3_response['Body'].read()
 
             formjson = json.loads(jsonstring)
-            jsonresponse['formfields'].append(jsonstring)
+            jsonresponse['formfields'] = formjson
 
     if bucketAccessPolicyArn is not None:
         detachExternalBucketPolicy(bucketAccessPolicyArn, event)
