@@ -30,13 +30,32 @@ def GetDocumentAnalysisResult(textract, jobId):
                 response = textract.get_document_analysis(JobId=jobId,
                                                 MaxResults=maxResults,
                                                 NextToken=paginationToken)
-        except :
-            if retryCount < maxRetryAttempt:
-                retryCount = retryCount + 1
-                print("Result retrieval failed, retrying after {} seconds".format(retryInterval))            
-                time.sleep(retryInterval)
+        except Exception as e:
+            exceptionType = str(type(e))
+            if exceptionType.find("AccessDeniedException") > 0:
+                finished = True
+                print("You aren't authorized to perform textract.analyze_document action.")    
+            elif exceptionType.find("InvalidJobIdException") > 0:
+                finished = True
+                print("An invalid job identifier was passed.")   
+            elif exceptionType.find("InvalidParameterException") > 0:
+                finished = True
+                print("An input parameter violated a constraint.")        
             else:
-                print("Result retrieval failed, after {} retry, aborting".format(maxRetryAttempt))             
+                if retryCount < maxRetryAttempt:
+                    retryCount = retryCount + 1
+                else:
+                    print(e)
+                    print("Result retrieval failed, after {} retry, aborting".format(maxRetryAttempt))                       
+                if exceptionType.find("InternalServerError") > 0:
+                    print("Amazon Textract experienced a service issue. Trying in {} seconds.".format(retryInterval))   
+                    time.sleep(retryInterval)
+                elif exceptionType.find("ProvisionedThroughputExceededException") > 0:
+                    print("The number of requests exceeded your throughput limit. Trying in {} seconds.".format(retryInterval*3))
+                    time.sleep(retryInterval*3)
+                elif exceptionType.find("ThrottlingException") > 0:
+                    print("Amazon Textract is temporarily unable to process the request. Trying in {} seconds.".format(retryInterval*6))
+                    time.sleep(retryInterval*6)             
 
         #Get the text blocks
         blocks=response['Blocks']

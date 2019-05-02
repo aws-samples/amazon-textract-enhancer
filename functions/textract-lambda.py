@@ -31,13 +31,33 @@ def GetDocumentAnalysisResult(textract, jobId):
                 response = textract.get_document_analysis(JobId=jobId,
                                                 MaxResults=maxResults,
                                                 NextToken=paginationToken)
-        except :
-            if retryCount < maxRetryAttempt:
-                retryCount = retryCount + 1
-                print("Result retrieval failed, retrying after {} seconds".format(retryInterval))            
-                time.sleep(retryInterval)
+        except Exception as e:
+            exceptionType = str(type(e))
+            if exceptionType.find("AccessDeniedException") > 0:
+                finished = True
+                print("You aren't authorized to perform textract.analyze_document action.")    
+            elif exceptionType.find("InvalidJobIdException") > 0:
+                finished = True
+                print("An invalid job identifier was passed.")   
+            elif exceptionType.find("InvalidParameterException") > 0:
+                finished = True
+                print("An input parameter violated a constraint.")        
             else:
-                print("Result retrieval failed, after {} retry, aborting".format(maxRetryAttempt))             
+                if retryCount < maxRetryAttempt:
+                    retryCount = retryCount + 1
+                else:
+                    print(e)
+                    print("Result retrieval failed, after {} retry, aborting".format(maxRetryAttempt))                       
+                if exceptionType.find("InternalServerError") > 0:
+                    print("Amazon Textract experienced a service issue. Trying in {} seconds.".format(retryInterval))   
+                    time.sleep(retryInterval)
+                elif exceptionType.find("ProvisionedThroughputExceededException") > 0:
+                    print("The number of requests exceeded your throughput limit. Trying in {} seconds.".format(retryInterval*3))
+                    time.sleep(retryInterval*3)
+                elif exceptionType.find("ThrottlingException") > 0:
+                    print("Amazon Textract is temporarily unable to process the request. Trying in {} seconds.".format(retryInterval*6))
+                    time.sleep(retryInterval*6)
+          
 
         #Get the text blocks
         blocks=response['Blocks']
@@ -422,21 +442,13 @@ def detachExternalBucketPolicy(bucketAccessPolicyArn, event):
         )
         print("Policy - {} deleted".format(bucketAccessPolicyArn))    
 
-
-def lambda_handler(event, context):
-    
-    print(event)
+def sync_call_handler(event, context): 
+        
     #Initialize Boto Resource	
     s3 = boto3.resource('s3')
     textract = boto3.client('textract')
     sqs = boto3.client('sqs')
     
-    tokenPrefix = os.environ['token_prefix']  
-
-    queueUrl = os.environ['queue_url'] 
-    roleArn = os.environ['role_arn']
-    topicArn = os.environ['topic_arn'] 
-
     retryCount = 0
     retryInterval = int(os.environ['retry_interval']) #30
     maxRetryAttempt = int(os.environ['max_retry_attempt']) #5
@@ -481,7 +493,7 @@ def lambda_handler(event, context):
             documentBlocks = response['Blocks']           
             print("RequestId: {}, Status: {}, Pages Processed: {}".format(jobId,
                                                                         response['ResponseMetadata']['HTTPStatusCode'],
-                                                                        response['DocumentMetadata']['Pages']))                               
+                                                                        response['DocumentMetadata']['Pages']))                                                                                                   
         except Exception as e:
             exceptionType = str(type(e))
             if exceptionType.find("AccessDeniedException") > 0:
@@ -515,7 +527,6 @@ def lambda_handler(event, context):
                     time.sleep(retryInterval*6)
         else:
             retryCount = -1   
-            
     if document_path == "":
         upload_prefix = jobId
     else:
@@ -593,5 +604,322 @@ def lambda_handler(event, context):
 
     if bucketAccessPolicyArn is not None:
         detachExternalBucketPolicy(bucketAccessPolicyArn, event)
+        
+    return jsonresponse
+
+def async_submit_handler(event, context):
+    
+    print(event)
+    
+    #Initialize Boto Resource	
+    s3 = boto3.resource('s3')
+    textract = boto3.client('textract')
+    sqs = boto3.client('sqs')
+    
+    tokenPrefix = os.environ['token_prefix']  
+
+    roleArn = os.environ['role_arn']
+    topicArn = os.environ['topic_arn'] 
+
+    retryCount = 0
+    retryInterval = int(os.environ['retry_interval']) #30
+    maxRetryAttempt = int(os.environ['max_retry_attempt']) #5
+    
+    external_bucket = ""
+    bucket = ""
+    document = ""
+
+    jsonresponse = {}
+    bucketAccessPolicyArn = None
+    
+    if 'ExternalBucketName' in event:
+        bucketAccessPolicyArn = attachExternalBucketPolicy(event['ExternalBucketName'])
+        external_bucket = event['ExternalBucketName']
+        
+    if "Records" in event:        
+        record, = event["Records"]        
+        print(record)
+        bucket = record['s3']['bucket']['name']
+        document = record['s3']['object']['key']
+    else:
+        bucket = event['ExternalBucketName']
+        document = event['ExternalDocumentPrefix']   
+        
+    if bucket == "" or  document == "":
+        print("Bucket and/or Document not specified, nothing to do.")
+        return jsonresponse
+
+    document_path = document[:document.rfind("/")] if document.find("/") >= 0 else ""
+    document_name = document[document.rfind("/")+1:document.rfind(".")]    
+        
+    #Submit Document Anlysis job to Textract to extract text features    
+    while retryCount >= 0 and retryCount < maxRetryAttempt:
+        try:
+            response = textract.start_document_analysis(
+                                    ClientRequestToken = "{}-{}".format(tokenPrefix, document[document.rfind("/")+1:document.rfind(".")]),
+                                    DocumentLocation={'S3Object': {'Bucket': bucket, 'Name': document}},
+                                    FeatureTypes=["TABLES", "FORMS"],
+                                    NotificationChannel={'SNSTopicArn': topicArn,'RoleArn': roleArn},
+                                    JobTag = "AnalyzeText-{}".format(document[document.rfind("/")+1:document.rfind(".")]))
+            print("Textract Request: {} submitted at {} with JobId - {}".format(
+                response['ResponseMetadata']['RequestId'],
+                response['ResponseMetadata']['HTTPHeaders']['date'],
+                response['JobId']
+                ))    
+            jobId = response['JobId']
+            print("Starting Job Id: {}".format(jobId))        
+        except Exception as e:
+            exceptionType = str(type(e))
+            if exceptionType.find("AccessDeniedException") > 0:
+                retryCount = -1
+                print("You aren't authorized to perform textract.analyze_document action.")    
+            elif exceptionType.find("BadDocumentException") > 0:
+                retryCount = -1
+                print("Textract isn't able to read the document.")   
+            elif exceptionType.find("DocumentTooLargeException") > 0:
+                retryCount = -1
+                print("The document can't be processed because it's too large. The maximum document size for synchronous operations 5 MB.")           
+            elif exceptionType.find("IdempotentParameterMismatchException") > 0:
+                retryCount = -1
+                print("A ClientRequestToken input parameter was reused with an operation, but at least one of the other input parameters is different from the previous call to the operation.")    
+            elif exceptionType.find("InvalidParameterException") > 0:
+                retryCount = -1
+                print("An input parameter violated a constraint.")                        
+            elif exceptionType.find("InvalidS3ObjectException") > 0:
+                retryCount = -1
+                print("S3 object doesn't exist")  
+            elif exceptionType.find("UnsupportedDocumentException") > 0:
+                retryCount = -1
+                print("The format of the input document isn't supported.")   
+            else:
+                retryCount = retryCount + 1
+                if exceptionType.find("InternalServerError") > 0:
+                    print("Amazon Textract experienced a service issue. Trying in {} seconds.".format(retryInterval))   
+                    time.sleep(retryInterval)
+                if exceptionType.find("LimitExceededException") > 0:
+                    print("Textract service limit was exceeded. Trying in {} seconds.".format(retryInterval*6))   
+                    time.sleep(retryInterval*6)                    
+                elif exceptionType.find("ProvisionedThroughputExceededException") > 0:
+                    print("The number of requests exceeded your throughput limit. Trying in {} seconds.".format(retryInterval*3))
+                    time.sleep(retryInterval*3)
+                elif exceptionType.find("ThrottlingException") > 0:
+                    print("Amazon Textract is temporarily unable to process the request. Trying in {} seconds.".format(retryInterval*6))
+                    time.sleep(retryInterval*6)
+        else:
+            retryCount = -1   
+
+    if document_path == "":
+        upload_prefix = jobId
+    else:
+        upload_prefix = "{}/{}".format(document_path, jobId)
+
+    print("upload_prefix = " + upload_prefix)
+
+    jsonresponse = {
+        'jobId': jobId,
+        'upload_prefix': upload_prefix,
+        'bucket': bucket,
+        'document': document,
+        'external_bucket': external_bucket
+    }
+        
+    return jsonresponse
+
+def postprocess_table_handler(event, context):
+    
+    #Initialize Boto Resource	
+    s3 = boto3.resource('s3')
+    textract = boto3.client('textract')
+    documentBlocks = None
+    bucket = ""
+    upload_prefix = ""
+    num_tables = -1
+    file_list = []
+
+    if "Records" in event:        
+        records = event['Records']
+        numRecords = len(records)
+        textractJobId = ""
+        textractStatus = ""
+        textractAPI = ""
+        textractJobTag = ""
+        textractS3ObjectName = ""
+        textractS3Bucket = ""
+        print("{} messages recieved".format(numRecords))
+        for record in records:
+            if 'Sns' in record.keys():
+                sns = record['Sns']
+                textractTimestamp =  sns['Timestamp']                  
+                print("{} = {}".format("Timestamp", sns['Timestamp']))                
+                if 'Message' in sns.keys():
+                    message = json.loads(sns['Message'])
+                    textractJobId = message['JobId']
+                    print("{} = {}".format("JobId", textractJobId))
+                    textractStatus = message['Status']
+                    print("{} = {}".format("Status",textractStatus))        
+                    textractAPI = message['API']
+                    print("{} = {}".format("API", textractAPI))                    
+                    textractJobTag = message['JobTag']
+                    print("{} = {}".format("JobTag", textractJobTag))    
+                    documentLocation = message['DocumentLocation']
+                    textractS3ObjectName = documentLocation['S3ObjectName']
+                    print("{} = {}".format("S3ObjectName", textractS3ObjectName))    
+                    textractS3Bucket = documentLocation['S3Bucket']
+                    print("{} = {}".format("S3Bucket", textractS3Bucket))      
+                    
+                    bucket = textractS3Bucket
+                    document_path = textractS3ObjectName[:textractS3ObjectName.rfind("/")] if textractS3ObjectName.find("/") >= 0 else ""
+                    document_name = textractS3ObjectName[textractS3ObjectName.rfind("/")+1:textractS3ObjectName.rfind(".")]     
+
+                    if document_path == "":
+                        upload_prefix = textractJobId
+                    else:
+                        upload_prefix = "{}/{}".format(document_path, textractJobId)
+
+                    print("upload_prefix = " + upload_prefix)  
+
+                    documentBlocks = GetDocumentAnalysisResult(textract, textractJobId) 
+
+    if documentBlocks is not None:
+        print("{} Blocks retrieved".format(len(documentBlocks)))
+
+        #Extract table information  into a Python dictionary by parsing the raw JSON from Textract
+        tabledict = extractTableBlocks(documentBlocks)
+        
+        #Generate XML document using table information    
+        tables = generateTableXML(tabledict)        
+        num_tables = len(tables)
+
+        for page in tables:
+            for table in page:
+                html_document = "{}-page-{}-table-{}.html".format(document_name, table.attrib['ContainingPage'], table.attrib['TableNumber'])
+                html_file = open("/tmp/"+html_document,'w+')
+                html_file.write(prettify(table))
+                html_file.close()
+                s3.meta.client.upload_file("/tmp/"+html_document, bucket, "{}/{}".format(upload_prefix,html_document))            
+           
+    s3_result = s3.meta.client.list_objects_v2(Bucket=bucket, Prefix="{}/".format(upload_prefix), Delimiter = "/")
+    if 'Contents' in s3_result:
+        
+        for key in s3_result['Contents']:
+            file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))
+        
+        while s3_result['IsTruncated']:
+            continuation_key = s3_result['NextContinuationToken']
+            s3_result = s3.meta.client.list_objects_v2(Bucket=bucket, Prefix="{}/".format(upload_prefix), Delimiter="/", ContinuationToken=continuation_key)
+            for key in s3_result['Contents']:
+                file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))            
+    print(file_list)   
+    
+    jsonresponse = {}
+    jsonresponse['tables'] = []
+    for s3file in file_list:
+        if s3file.endswith("html"):
+            file_handle = s3file[s3file.find(bucket)+len(bucket)+1:]
+            s3_object = s3.Object(bucket,file_handle)
+            s3_response = s3_object.get()
+            xmlstring = s3_response['Body'].read()
+            
+            tablexml = ElementTree.fromstring(xmlstring)
+            jsonresponse['tables'].append(etree_to_dict(tablexml))
+        
+    return jsonresponse
+
+def postprocess_form_handler(event, context):
+    
+    #Initialize Boto Resource	
+    s3 = boto3.resource('s3')
+    textract = boto3.client('textract')
+    documentBlocks = None
+    bucket = ""
+    upload_prefix = ""
+    num_tables = -1
+    file_list = []
+
+    if "Records" in event:        
+        records = event['Records']
+        numRecords = len(records)
+        textractJobId = ""
+        textractStatus = ""
+        textractAPI = ""
+        textractJobTag = ""
+        textractS3ObjectName = ""
+        textractS3Bucket = ""
+        print("{} messages recieved".format(numRecords))
+        for record in records:
+            if 'Sns' in record.keys():
+                sns = record['Sns']
+                textractTimestamp =  sns['Timestamp']                  
+                print("{} = {}".format("Timestamp", sns['Timestamp']))                
+                if 'Message' in sns.keys():
+                    message = json.loads(sns['Message'])
+                    textractJobId = message['JobId']
+                    print("{} = {}".format("JobId", textractJobId))
+                    textractStatus = message['Status']
+                    print("{} = {}".format("Status",textractStatus))        
+                    textractAPI = message['API']
+                    print("{} = {}".format("API", textractAPI))                    
+                    textractJobTag = message['JobTag']
+                    print("{} = {}".format("JobTag", textractJobTag))    
+                    documentLocation = message['DocumentLocation']
+                    textractS3ObjectName = documentLocation['S3ObjectName']
+                    print("{} = {}".format("S3ObjectName", textractS3ObjectName))    
+                    textractS3Bucket = documentLocation['S3Bucket']
+                    print("{} = {}".format("S3Bucket", textractS3Bucket))      
+                    
+                    bucket = textractS3Bucket
+                    document_path = textractS3ObjectName[:textractS3ObjectName.rfind("/")] if textractS3ObjectName.find("/") >= 0 else ""
+                    document_name = textractS3ObjectName[textractS3ObjectName.rfind("/")+1:textractS3ObjectName.rfind(".")]     
+
+                    if document_path == "":
+                        upload_prefix = textractJobId
+                    else:
+                        upload_prefix = "{}/{}".format(document_path, textractJobId)
+
+                    print("upload_prefix = " + upload_prefix)  
+
+                    documentBlocks = GetDocumentAnalysisResult(textract, textractJobId) 
+
+    if documentBlocks is not None:
+        print("{} Blocks retrieved".format(len(documentBlocks)))
+
+        #Extract form fields into a Python dictionary by parsing the raw JSON from Textract
+        blocks = groupBlocksByType(documentBlocks)
+        formKeys, formValues = extractKeyValuePairs(blocks)
+        pageWords = extractWords(blocks)
+
+        #Generate JSON document using form fields information  
+        formEntries = generateFormEntries(formKeys, formValues, pageWords)   
+
+        json_document = "{}.json".format(document_name)
+        json_file = open("/tmp/"+json_document,'w+')
+        json_file.write(json.dumps(formEntries, indent=4, sort_keys=True))
+        json_file.close()
+        s3.meta.client.upload_file("/tmp/"+json_document, bucket, "{}/{}".format(upload_prefix,json_document))         
+           
+    s3_result = s3.meta.client.list_objects_v2(Bucket=bucket, Prefix="{}/".format(upload_prefix), Delimiter = "/")
+    if 'Contents' in s3_result:
+        
+        for key in s3_result['Contents']:
+            file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))
+        
+        while s3_result['IsTruncated']:
+            continuation_key = s3_result['NextContinuationToken']
+            s3_result = s3.meta.client.list_objects_v2(Bucket=bucket, Prefix="{}/".format(upload_prefix), Delimiter="/", ContinuationToken=continuation_key)
+            for key in s3_result['Contents']:
+                file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))            
+
+    print(file_list)   
+    
+    jsonresponse = {}
+    for s3file in file_list:
+        if s3file.endswith("json"):
+            file_handle = s3file[s3file.find(bucket)+len(bucket)+1:]
+            s3_object = s3.Object(bucket,file_handle)
+            s3_response = s3_object.get()
+            jsonstring = s3_response['Body'].read()
+
+            formjson = json.loads(jsonstring)
+            jsonresponse['formfields'] = formjson
         
     return jsonresponse

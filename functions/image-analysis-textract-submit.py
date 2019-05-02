@@ -214,15 +214,42 @@ def lambda_handler(event, context):
             jobId = response['JobId']
             print("Starting Job Id: {}".format(jobId))        
         except Exception as e:
-            print(e)
-            if retryCount < maxRetryAttempt - 1:
-                retryCount = retryCount + 1
-                print("Job submission failed, retrying after {} seconds".format(retryInterval))            
-                time.sleep(retryInterval)
-            else:
-                print("Job submission failed, after {} retry, aborting".format(maxRetryAttempt))
+            exceptionType = str(type(e))
+            if exceptionType.find("AccessDeniedException") > 0:
                 retryCount = -1
-                return jsonresponse
+                print("You aren't authorized to perform textract.analyze_document action.")    
+            elif exceptionType.find("BadDocumentException") > 0:
+                retryCount = -1
+                print("Textract isn't able to read the document.")   
+            elif exceptionType.find("DocumentTooLargeException") > 0:
+                retryCount = -1
+                print("The document can't be processed because it's too large. The maximum document size for synchronous operations 5 MB.")           
+            elif exceptionType.find("IdempotentParameterMismatchException") > 0:
+                retryCount = -1
+                print("A ClientRequestToken input parameter was reused with an operation, but at least one of the other input parameters is different from the previous call to the operation.")    
+            elif exceptionType.find("InvalidParameterException") > 0:
+                retryCount = -1
+                print("An input parameter violated a constraint.")                        
+            elif exceptionType.find("InvalidS3ObjectException") > 0:
+                retryCount = -1
+                print("S3 object doesn't exist")  
+            elif exceptionType.find("UnsupportedDocumentException") > 0:
+                retryCount = -1
+                print("The format of the input document isn't supported.")   
+            else:
+                retryCount = retryCount + 1
+                if exceptionType.find("InternalServerError") > 0:
+                    print("Amazon Textract experienced a service issue. Trying in {} seconds.".format(retryInterval))   
+                    time.sleep(retryInterval)
+                if exceptionType.find("LimitExceededException") > 0:
+                    print("Textract service limit was exceeded. Trying in {} seconds.".format(retryInterval*6))   
+                    time.sleep(retryInterval*6)                    
+                elif exceptionType.find("ProvisionedThroughputExceededException") > 0:
+                    print("The number of requests exceeded your throughput limit. Trying in {} seconds.".format(retryInterval*3))
+                    time.sleep(retryInterval*3)
+                elif exceptionType.find("ThrottlingException") > 0:
+                    print("Amazon Textract is temporarily unable to process the request. Trying in {} seconds.".format(retryInterval*6))
+                    time.sleep(retryInterval*6)
         else:
             retryCount = -1   
 

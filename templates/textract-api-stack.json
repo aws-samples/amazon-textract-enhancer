@@ -19,6 +19,13 @@
             "Default": "AmazonTextractJobStatusTopic",
             "Description": "SNS Topic where Textract will publish JobIds upon completion"            
         },       
+        "DynamoDBTableName" :{
+            "Type": "String",
+            "Description": "DynamoDB Table name where job status and results will be stored",
+            "AllowedPattern": "^[a-zA-Z0-9._-]{3,255}$",
+            "Default": "TextractDocumentAnalysisTable",
+            "ConstraintDescription" : "Should be a Valid DynamoDB Table Name"
+        },        
         "LambdaCodeBucketName" :{
             "Type": "String",
             "AllowedPattern": "^([a-z]|(\\d(?!\\d{0,2}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})))([a-z\\d]|(\\.(?!(\\.|-)))|(-(?!\\.))){1,61}[a-z\\d\\.]$",
@@ -28,7 +35,7 @@
         },  
         "LambdaCodeFile" :{
             "Type": "String",
-            "Default": "image-analysis-table-extract-async.zip",
+            "Default": "textract-lambda.zip",
             "Description": "Zip Filename containing the lambda code and dependencies"            
         }             
     },  
@@ -38,60 +45,201 @@
         "NewDocumentBucketCreation" : { "Fn::And" : [ {"Condition" : "DocumentBucketNameNotEmptyCondition"}, {"Condition" : "NewDocumentBucketNeededCondition"} ] },
         "AmazonTextractJobStatusTopicNameNotEmptyCondition" : { "Fn::Not" : [ { "Fn::Equals" : ["", {"Ref": "AmazonTextractJobStatusTopicName"}] } ] }
     },
-    "Resources": {       
-        "AmazonTextractJobStatusTopic" : {
-            "Type" : "AWS::SNS::Topic",
-            "Condition": "AmazonTextractJobStatusTopicNameNotEmptyCondition",
-            "Properties" : {
-                "DisplayName" : {"Fn::Join": ["-", [{"Ref": "AWS::Region"}, {"Ref": "AmazonTextractJobStatusTopicName"}]]}
+    "Resources": {     
+        "TextractDocumentAnalysisTable": {
+            "Type": "AWS::DynamoDB::Table",
+            "Properties": {
+                "TableName": {"Ref" : "DynamoDBTableName"},
+                "AttributeDefinitions": [
+                    {
+                        "AttributeName": "JobID",
+                        "AttributeType": "S"
+                    },
+                    {
+                        "AttributeName": "ProcessedTime",
+                        "AttributeType": "S"
+                    },
+                    {
+                        "AttributeName": "DocumentBucket",
+                        "AttributeType": "S"
+                    },
+                    {
+                        "AttributeName": "DocumentPath",
+                        "AttributeType": "S"
+                    }
+                ],
+                "KeySchema": [
+                    {
+                        "AttributeName": "JobID",
+                        "KeyType": "HASH"
+                    },
+                    {
+                        "AttributeName": "ProcessedTime",
+                        "KeyType": "RANGE"
+                    }
+                ],
+                "GlobalSecondaryIndexes": [
+                    {
+                        "IndexName": "NamePartIndex",
+                        "KeySchema": [
+                              {
+                                    "AttributeName": "DocumentBucket",
+                                    "KeyType": "HASH"
+                              },
+                              {
+                                    "AttributeName": "DocumentPath",
+                                    "KeyType": "RANGE"
+                              }
+                        ],
+                        "Projection": {
+                            "ProjectionType": "KEYS_ONLY"
+                        },
+                        "ProvisionedThroughput": {
+                              "ReadCapacityUnits": 5,
+                              "WriteCapacityUnits": 5
+                        }
+                    }
+                ],
+                "ProvisionedThroughput": {
+                    "ReadCapacityUnits": 5,
+                    "WriteCapacityUnits": 5
+                }
             }
         },
-        "AmazonTextractJobStatusQueue" : {
-            "DependsOn": "AmazonTextractJobStatusTopic",
-            "Type" : "AWS::SQS::Queue",
-            "Properties" : {
-                "MessageRetentionPeriod": "1209600",
-                "ReceiveMessageWaitTimeSeconds": "20",
-                "VisibilityTimeout": "60"
-            }
-        },    
-        "QueuePermission": { 
-            "Type" : "AWS::SQS::QueuePolicy",
-            "DependsOn": "AmazonTextractJobStatusQueue",
-            "Properties" : {
-               "PolicyDocument" : {
+        "ScalingRole": {
+            "Type": "AWS::IAM::Role",
+            "DependsOn": "TextractDocumentAnalysisTable",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
                     "Version": "2012-10-17",
-                    "Id": "arn:aws:sqs:us-east-1:741855114961:AmazonTextractTextAnalysisResultQueue/SQSDefaultPolicy",
                     "Statement": [
                         {
                             "Effect": "Allow",
                             "Principal": {
-                                "AWS": "*"
-                                },
-                                "Action": "SQS:SendMessage",
-                                "Resource": {"Fn::GetAtt" : ["AmazonTextractJobStatusQueue", "Arn"] },
-                                "Condition": {
-                                    "ArnEquals": {
-                                        "aws:SourceArn": {"Ref" : "AmazonTextractJobStatusTopic"}
-                                    }
-                            }
+                                "Service": [
+                                    "application-autoscaling.amazonaws.com"
+                                ]
+                            },
+                            "Action": [
+                                "sts:AssumeRole"
+                            ]
                         }
-                    ]                   
-               },
-               "Queues" : [ {"Ref" : "AmazonTextractJobStatusQueue"}]
+                    ]
+                },
+                "Path": "/",
+                "Policies": [
+                    {
+                        "PolicyName": "root",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "dynamodb:DescribeTable",
+                                        "dynamodb:UpdateTable",
+                                        "cloudwatch:PutMetricAlarm",
+                                        "cloudwatch:DescribeAlarms",
+                                        "cloudwatch:GetMetricStatistics",
+                                        "cloudwatch:SetAlarmState",
+                                        "cloudwatch:DeleteAlarms"
+                                    ],
+                                    "Resource": "*"
+                                }
+                            ]
+                        }
+                    }
+                ]
             }
-        },        
-        "TopicQueueSubscription": {
-            "DependsOn": "QueuePermission",
-            "Type" : "AWS::SNS::Subscription",
-            "Properties" : {
-                "TopicArn" : {"Ref" : "AmazonTextractJobStatusTopic"},
-                "Protocol" : "sqs",                
-                "Endpoint" : {"Fn::GetAtt" : ["AmazonTextractJobStatusQueue", "Arn"] }
-              }            
         },
+        "WriteCapacityScalableTarget": {
+            "Type": "AWS::ApplicationAutoScaling::ScalableTarget",
+            "DependsOn": "ScalingRole",
+            "Properties": {
+                "MaxCapacity": 15,
+                "MinCapacity": 5,
+                "ResourceId": { "Fn::Join": [
+                  "/",
+                  [
+                    "table",
+                    { "Ref": "TextractDocumentAnalysisTable" }
+                  ]
+                ] },
+                "RoleARN": {
+                  "Fn::GetAtt": ["ScalingRole", "Arn"]
+                },
+                "ScalableDimension": "dynamodb:table:WriteCapacityUnits",
+                "ServiceNamespace": "dynamodb"
+            }
+        },
+        "ReadCapacityScalableTarget": {
+            "Type": "AWS::ApplicationAutoScaling::ScalableTarget",
+            "DependsOn": "ScalingRole",
+            "Properties": {
+                "MaxCapacity": 15,
+                "MinCapacity": 5,
+                "ResourceId": { "Fn::Join": [
+                  "/",
+                  [
+                    "table",
+                    { "Ref": "TextractDocumentAnalysisTable" }
+                  ]
+                ] },
+                "RoleARN": {
+                  "Fn::GetAtt": ["ScalingRole", "Arn"]
+                },
+                "ScalableDimension": "dynamodb:table:ReadCapacityUnits",
+                "ServiceNamespace": "dynamodb"
+            }
+        },
+        "WriteScalingPolicy": {
+            "Type": "AWS::ApplicationAutoScaling::ScalingPolicy",
+            "DependsOn": "WriteCapacityScalableTarget",
+            "Properties": {
+                "PolicyName": "WriteAutoScalingPolicy",
+                "PolicyType": "TargetTrackingScaling",
+                "ScalingTargetId": {
+                    "Ref": "WriteCapacityScalableTarget"
+                },
+                "TargetTrackingScalingPolicyConfiguration": {
+                    "TargetValue": 50.0,
+                    "ScaleInCooldown": 60,
+                    "ScaleOutCooldown": 60,
+                    "PredefinedMetricSpecification": {
+                        "PredefinedMetricType": "DynamoDBWriteCapacityUtilization"
+                    }
+                }
+            }
+        },
+        "ReadScalingPolicy": {
+            "Type": "AWS::ApplicationAutoScaling::ScalingPolicy",
+            "DependsOn": "ReadCapacityScalableTarget",
+            "Properties": {
+                "PolicyName": "ReadAutoScalingPolicy",
+                "PolicyType": "TargetTrackingScaling",
+                "ScalingTargetId": {
+                    "Ref": "ReadCapacityScalableTarget"
+                },
+                "TargetTrackingScalingPolicyConfiguration": {
+                    "TargetValue": 50.0,
+                    "ScaleInCooldown": 60,
+                    "ScaleOutCooldown": 60,
+                    "PredefinedMetricSpecification": {
+                        "PredefinedMetricType": "DynamoDBReadCapacityUtilization"
+                    }
+                }
+            }
+        },          
+        "AmazonTextractJobStatusTopic" : {
+            "Type" : "AWS::SNS::Topic",
+            "DependsOn": "TextractDocumentAnalysisTable",
+            "Condition": "AmazonTextractJobStatusTopicNameNotEmptyCondition",
+            "Properties" : {
+                "DisplayName" : {"Fn::Join": ["-", [{"Ref": "AWS::Region"}, {"Ref": "AmazonTextractJobStatusTopicName"}]]}
+            }
+        },            
         "TextractServiceRole": {
-            "DependsOn": "TopicQueueSubscription",
+            "DependsOn": "TextractDocumentAnalysisTable",
             "Type" : "AWS::IAM::Role",
             "Properties" : {  
                 "RoleName": {"Fn::Join": ["", [{"Ref": "AWS::Region"}, "TextractServiceRole"]]},            
@@ -220,23 +368,21 @@
                 ]
             }
         },
-        "TextractDocumentAnalyzerFunction": {
+        "TextractAsyncJobSubmitFunction": {
             "Type": "AWS::Lambda::Function",
             "DependsOn" : "LambdaTextractRole",
             "Properties": {
                 "Description" : "Python Lambda function that scans an input S3 bucket for scanned document, and invokes Textract to extract text features.",
-                "Handler": "image-analysis-table-extract-async.lambda_handler",
+                "Handler": "textract_lambda.async_submit_handler",
                 "Role": { "Fn::GetAtt" : ["LambdaTextractRole", "Arn"] },
                 "Environment": {
                     "Variables" : 
                         { 
                             "AWS_DATA_PATH": "models",
-                            "token_prefix": "TextractDocumentAnalyzerJob",
-                            "max_results": "1000",       
                             "max_retry_attempt": "3",   
-                            "retry_interval": "10", 
+                            "retry_interval": "10",                             
+                            "token_prefix": "TextractDocumentAnalyzerJob",
                             "topic_arn": {"Ref" : "AmazonTextractJobStatusTopic"},
-                            "queue_url" : {"Ref" : "AmazonTextractJobStatusQueue"},         
                             "role_arn": {"Fn::GetAtt" : ["TextractServiceRole", "Arn"] },  
                             "role_name":  { "Ref": "LambdaTextractRole" }
                         }
@@ -253,20 +399,94 @@
                 }
             }
         },
+        "TextractPostProcessTableFunction": {
+            "Type": "AWS::Lambda::Function",
+            "DependsOn" : "LambdaTextractRole",
+            "Properties": {
+                "Description" : "Python Lambda function that retrieves the document job result and extracts table structure from the result",
+                "Handler": "textract_lambda.postprocess_table_handler",
+                "Role": { "Fn::GetAtt" : ["LambdaTextractRole", "Arn"] },
+                "Environment": {
+                    "Variables" : 
+                        { 
+                            "AWS_DATA_PATH": "models",
+                            "max_retry_attempt": "3",   
+                            "retry_interval": "10",
+                            "max_results": "1000"
+                        }
+                },                 
+                "Code": {
+                    "S3Bucket": { "Ref" : "LambdaCodeBucketName" },
+                    "S3Key": { "Ref" : "LambdaCodeFile" }
+                },
+                "Runtime": "python3.6",
+                "Timeout": "900",
+                "MemorySize": "1024",
+                "TracingConfig": {
+                    "Mode": "Active"
+                }
+            }
+        },   
+        "TextractPostProcessFormFunction": {
+            "Type": "AWS::Lambda::Function",
+            "DependsOn" : "LambdaTextractRole",
+            "Properties": {
+                "Description" : "Python Lambda function that retrieves the document job result and extracts form fields from the result",
+                "Handler": "textract_lambda.postprocess_form_handler",
+                "Role": { "Fn::GetAtt" : ["LambdaTextractRole", "Arn"] },
+                "Environment": {
+                    "Variables" : 
+                        { 
+                            "AWS_DATA_PATH": "models",
+                            "max_retry_attempt": "3",   
+                            "retry_interval": "10",
+                            "max_results": "1000"
+                        }
+                },                 
+                "Code": {
+                    "S3Bucket": { "Ref" : "LambdaCodeBucketName" },
+                    "S3Key": { "Ref" : "LambdaCodeFile" }
+                },
+                "Runtime": "python3.6",
+                "Timeout": "900",
+                "MemorySize": "1024",
+                "TracingConfig": {
+                    "Mode": "Active"
+                }
+            }
+        },                 
         "LambdaInvokeS3Permission": {
             "Type": "AWS::Lambda::Permission",
-            "DependsOn": "TextractDocumentAnalyzerFunction",
+            "DependsOn": "TextractAsyncJobSubmitFunction",
             "Properties": {
-                "FunctionName": {"Ref": "TextractDocumentAnalyzerFunction"},
+                "FunctionName": {"Ref": "TextractAsyncJobSubmitFunction"},
                 "Action": "lambda:InvokeFunction",
                 "Principal": "s3.amazonaws.com",
                 "SourceAccount": {"Ref": "AWS::AccountId"},
                 "SourceArn": {"Fn::Join": [":",["arn","aws","s3","","", {"Fn::Join": ["-", [{"Ref": "AWS::AccountId"}, {"Ref": "DocumentBucketName"}]]}]]}
             }
         },
+        "TopicTableLambdaSubscription": {
+            "DependsOn": ["AmazonTextractJobStatusTopic", "TextractPostProcessTableFunction"],
+            "Type" : "AWS::SNS::Subscription",
+            "Properties" : {
+                "TopicArn" : {"Ref" : "AmazonTextractJobStatusTopic"},
+                "Protocol" : "lambda",                
+                "Endpoint" : {"Fn::GetAtt" : ["TextractPostProcessTableFunction", "Arn"] }
+              }            
+        },
+        "TopicFormLambdaSubscription": {
+            "DependsOn": ["AmazonTextractJobStatusTopic", "TextractPostProcessFormFunction"],
+            "Type" : "AWS::SNS::Subscription",
+            "Properties" : {
+                "TopicArn" : {"Ref" : "AmazonTextractJobStatusTopic"},
+                "Protocol" : "lambda",                
+                "Endpoint" : {"Fn::GetAtt" : ["TextractPostProcessFormFunction", "Arn"] }
+              }            
+        },          
         "DocumentBucket": {
             "Type": "AWS::S3::Bucket",
-            "DependsOn": "LambdaInvokeS3Permission",
+            "DependsOn": ["LambdaInvokeS3Permission", "TextractAsyncJobSubmitFunction"],
             "Condition": "NewDocumentBucketCreation",          
             "Properties": {
                 "BucketName" : {"Fn::Join": ["-", [{"Ref": "AWS::AccountId"}, {"Ref": "DocumentBucketName"}]]},                
@@ -278,18 +498,18 @@
                     "LambdaConfigurations" : [
                         {
                             "Event" : "s3:ObjectCreated:*",
-                            "Function" : {"Fn::GetAtt": ["TextractDocumentAnalyzerFunction", "Arn"]},
+                            "Function" : {"Fn::GetAtt": ["TextractAsyncJobSubmitFunction", "Arn"]},
                             "Filter" : { "S3Key" : { "Rules" : [ { "Name" : "suffix", "Value" : "pdf" } ] } }
                         },
                         {
                             "Event" : "s3:ObjectCreated:*",
-                            "Function" : {"Fn::GetAtt": ["TextractDocumentAnalyzerFunction", "Arn"]},
+                            "Function" : {"Fn::GetAtt": ["TextractAsyncJobSubmitFunction", "Arn"]},
                             "Filter" : { "S3Key" : { "Rules" : [ { "Name" : "suffix", "Value" : "jpg" } ] } }
 
                         },
                         {
                             "Event" : "s3:ObjectCreated:*",
-                            "Function" : {"Fn::GetAtt": ["TextractDocumentAnalyzerFunction", "Arn"]},
+                            "Function" : {"Fn::GetAtt": ["TextractAsyncJobSubmitFunction", "Arn"]},
                             "Filter" : { "S3Key" : { "Rules" : [ { "Name" : "suffix", "Value" : "jpeg" } ] } }
 
                         }                      
@@ -338,7 +558,7 @@
         },
         "TextractDemoAPI": {
             "Type": "AWS::ApiGateway::RestApi",
-            "DependsOn": "TextractDocumentAnalyzerFunction",
+            "DependsOn": "TextractAsyncJobSubmitFunction",
             "Properties": {
                 "Name": "Textract Demo API",
                 "Description" : "API to invoke Textract with documents on specified S3 bucket, and extract text features",
