@@ -52,42 +52,42 @@
                 "TableName": {"Ref" : "DynamoDBTableName"},
                 "AttributeDefinitions": [
                     {
-                        "AttributeName": "JobID",
+                        "AttributeName": "JobId",
                         "AttributeType": "S"
                     },
                     {
-                        "AttributeName": "ProcessedTime",
-                        "AttributeType": "S"
+                        "AttributeName": "JobTimeStamp",
+                        "AttributeType": "N"
                     },
                     {
                         "AttributeName": "DocumentBucket",
                         "AttributeType": "S"
                     },
                     {
-                        "AttributeName": "DocumentPath",
+                        "AttributeName": "DocumentName",
                         "AttributeType": "S"
-                    }
+                    }                    
                 ],
                 "KeySchema": [
                     {
-                        "AttributeName": "JobID",
+                        "AttributeName": "JobId",
                         "KeyType": "HASH"
                     },
                     {
-                        "AttributeName": "ProcessedTime",
+                        "AttributeName": "JobTimeStamp",
                         "KeyType": "RANGE"
                     }
                 ],
                 "GlobalSecondaryIndexes": [
                     {
-                        "IndexName": "NamePartIndex",
+                        "IndexName": "DocumentIndex",
                         "KeySchema": [
                               {
                                     "AttributeName": "DocumentBucket",
                                     "KeyType": "HASH"
                               },
                               {
-                                    "AttributeName": "DocumentPath",
+                                    "AttributeName": "DocumentName",
                                     "KeyType": "RANGE"
                               }
                         ],
@@ -99,7 +99,7 @@
                               "WriteCapacityUnits": 5
                         }
                     }
-                ],
+                ],                
                 "ProvisionedThroughput": {
                     "ReadCapacityUnits": 5,
                     "WriteCapacityUnits": 5
@@ -340,13 +340,13 @@
                         }
                     },
                     {
-                        "PolicyName": "sqs_access_policy",
+                        "PolicyName": "dynamodb_access_policy",
                         "PolicyDocument": {
                             "Version": "2012-10-17",
                             "Statement": [
                                 {
                                     "Effect": "Allow",
-                                    "Action": "sqs:*",
+                                    "Action": "dynamodb:*",
                                     "Resource": "*"
                                 }                             
                             ]
@@ -374,7 +374,7 @@
             "Properties": {
                 "Description" : "Python Lambda function that scans an input S3 bucket for scanned document, and invokes Textract to extract text features.",
                 "Handler": "textract_lambda.async_submit_handler",
-                "Role": { "Fn::GetAtt" : ["LambdaTextractRole", "Arn"] },
+                "Role": { "Fn::GetAtt" : ["LambdaTextractRole", "Arn"] },               
                 "Environment": {
                     "Variables" : 
                         { 
@@ -384,7 +384,8 @@
                             "token_prefix": "TextractDocumentAnalyzerJob",
                             "topic_arn": {"Ref" : "AmazonTextractJobStatusTopic"},
                             "role_arn": {"Fn::GetAtt" : ["TextractServiceRole", "Arn"] },  
-                            "role_name":  { "Ref": "LambdaTextractRole" }
+                            "role_name":  { "Ref": "LambdaTextractRole" },
+                            "table_name": {"Ref" : "TextractDocumentAnalysisTable"}
                         }
                 },                 
                 "Code": {
@@ -412,7 +413,8 @@
                             "AWS_DATA_PATH": "models",
                             "max_retry_attempt": "3",   
                             "retry_interval": "10",
-                            "max_results": "1000"
+                            "max_results": "1000",
+                            "table_name": {"Ref" : "TextractDocumentAnalysisTable"}
                         }
                 },                 
                 "Code": {
@@ -440,7 +442,8 @@
                             "AWS_DATA_PATH": "models",
                             "max_retry_attempt": "3",   
                             "retry_interval": "10",
-                            "max_results": "1000"
+                            "max_results": "1000",
+                            "table_name": {"Ref" : "TextractDocumentAnalysisTable"}
                         }
                 },                 
                 "Code": {
@@ -466,6 +469,17 @@
                 "SourceArn": {"Fn::Join": [":",["arn","aws","s3","","", {"Fn::Join": ["-", [{"Ref": "AWS::AccountId"}, {"Ref": "DocumentBucketName"}]]}]]}
             }
         },
+        "PostProcessTableInvokeSNSPermission": {
+            "Type": "AWS::Lambda::Permission",
+            "DependsOn": ["TextractPostProcessTableFunction", "AmazonTextractJobStatusTopic"],
+            "Properties": {
+                "FunctionName": {"Ref": "TextractPostProcessTableFunction"},
+                "Action": "lambda:InvokeFunction",
+                "Principal": "sns.amazonaws.com",
+                "SourceAccount": {"Ref": "AWS::AccountId"},
+                "SourceArn": {"Ref": "AWS::AmazonTextractJobStatusTopic"}
+            }
+        },        
         "TopicTableLambdaSubscription": {
             "DependsOn": ["AmazonTextractJobStatusTopic", "TextractPostProcessTableFunction"],
             "Type" : "AWS::SNS::Subscription",
@@ -475,6 +489,17 @@
                 "Endpoint" : {"Fn::GetAtt" : ["TextractPostProcessTableFunction", "Arn"] }
               }            
         },
+        "PostProcessFormInvokeSNSPermission": {
+            "Type": "AWS::Lambda::Permission",
+            "DependsOn": ["TextractPostProcessFormFunction", "AmazonTextractJobStatusTopic"],
+            "Properties": {
+                "FunctionName": {"Ref": "TextractPostProcessFormFunction"},
+                "Action": "lambda:InvokeFunction",
+                "Principal": "sns.amazonaws.com",
+                "SourceAccount": {"Ref": "AWS::AccountId"},
+                "SourceArn": {"Ref": "AWS::AmazonTextractJobStatusTopic"}
+            }
+        },          
         "TopicFormLambdaSubscription": {
             "DependsOn": ["AmazonTextractJobStatusTopic", "TextractPostProcessFormFunction"],
             "Type" : "AWS::SNS::Subscription",

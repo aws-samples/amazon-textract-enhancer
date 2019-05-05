@@ -50,10 +50,10 @@ def GetDocumentAnalysisResult(textract, jobId):
                     print("Amazon Textract experienced a service issue. Trying in {} seconds.".format(retryInterval))   
                     time.sleep(retryInterval)
                 elif exceptionType.find("ProvisionedThroughputExceededException") > 0:
-                    print("The number of requests exceeded your throughput limit. Trying in {} seconds.".format(retryInterval*6))
+                    print("The number of requests exceeded your throughput limit. Trying in {} seconds.".format(retryInterval*3))
                     time.sleep(retryInterval*3)
                 elif exceptionType.find("ThrottlingException") > 0:
-                    print("Amazon Textract is temporarily unable to process the request. Trying in {} seconds.".format(retryInterval*3))
+                    print("Amazon Textract is temporarily unable to process the request. Trying in {} seconds.".format(retryInterval*6))
                     time.sleep(retryInterval*6)       
 
         #Get the text blocks
