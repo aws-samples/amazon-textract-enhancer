@@ -58,13 +58,13 @@
                     {
                         "AttributeName": "JobTimeStamp",
                         "AttributeType": "N"
-                    },
+                    },                    
                     {
                         "AttributeName": "DocumentBucket",
                         "AttributeType": "S"
                     },
                     {
-                        "AttributeName": "DocumentName",
+                        "AttributeName": "DocumentPath",
                         "AttributeType": "S"
                     }                    
                 ],
@@ -87,7 +87,7 @@
                                     "KeyType": "HASH"
                               },
                               {
-                                    "AttributeName": "DocumentName",
+                                    "AttributeName": "DocumentPath",
                                     "KeyType": "RANGE"
                               }
                         ],
@@ -457,7 +457,33 @@
                     "Mode": "Active"
                 }
             }
-        },                 
+        },  
+        "TextractResultRetrievalFunction": {
+            "Type": "AWS::Lambda::Function",
+            "DependsOn" : "LambdaTextractRole",
+            "Properties": {
+                "Description" : "Python Lambda function that retrieves the textract results in form of html tables and json dicitionary by reading files from s3 output location",
+                "Handler": "textract_lambda.result_retrieval_handler",
+                "Role": { "Fn::GetAtt" : ["LambdaTextractRole", "Arn"] },
+                "Environment": {
+                    "Variables" : 
+                        { 
+                            "AWS_DATA_PATH": "models",
+                            "table_name": {"Ref" : "TextractDocumentAnalysisTable"}
+                        }
+                },                 
+                "Code": {
+                    "S3Bucket": { "Ref" : "LambdaCodeBucketName" },
+                    "S3Key": { "Ref" : "LambdaCodeFile" }
+                },
+                "Runtime": "python3.6",
+                "Timeout": "900",
+                "MemorySize": "1024",
+                "TracingConfig": {
+                    "Mode": "Active"
+                }
+            }
+        },                          
         "LambdaInvokeS3Permission": {
             "Type": "AWS::Lambda::Permission",
             "DependsOn": "TextractAsyncJobSubmitFunction",

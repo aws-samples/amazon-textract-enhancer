@@ -73,7 +73,7 @@ def GetDocumentAnalysisResult(textract, jobId):
                 paginationToken = None
                 finished = True  
     
-    return result
+    return response['DocumentMetadata']['Pages'], result
 
 #Function to extract table information from the raw JSON returned by Textract
 def extractTableBlocks(json):
@@ -173,6 +173,7 @@ def extractTableBlocks(json):
 #Function to genrate table structure in XML, that can be rendered as HTML table
 def generateTableXML(tabledict):
     tables = []
+    num_tables = len(tabledict.keys())
     for tkey in tabledict.keys():
         containingPage = tabledict[tkey]['ContainingPage']
         table = Element('table')
@@ -191,7 +192,7 @@ def generateTableXML(tabledict):
             tables.append([])
         table.set('TableNumber', str(len(tables[containingPage - 1]) + 1))
         tables[containingPage - 1].append(table)
-    return tables
+    return num_tables, tables
 
 #Convert XML Tables to JSON    
 def etree_to_dict(t):
@@ -557,8 +558,7 @@ def sync_call_handler(event, context):
         tabledict = extractTableBlocks(documentBlocks)
         
         #Generate XML document using table information    
-        tables = generateTableXML(tabledict)        
-        num_tables = len(tables)
+        num_tables, tables = generateTableXML(tabledict)        
 
         for page in tables:
             for table in page:
@@ -698,7 +698,13 @@ def async_submit_handler(event, context):
         'UploadPrefix': upload_prefix,        
         'DocumentName':document_name,
         'DocumentType':document_type,
-        'JobStartTimeStamp': str(jobStartTimeStamp)
+        'JobStartTimeStamp': str(jobStartTimeStamp),
+        'JobCompleteTimeStamp': '0',
+        'NumPages': '0',
+        'NumTables': '0',
+        'NumFields': '0',        
+        'TableFiles': [],
+        'FormFiles': []        
     }
     
     recordExists = False
@@ -714,6 +720,17 @@ def async_submit_handler(event, context):
             recordExists = True
             jsonresponse['JobStartTimeStamp'] = int(response['Items'][0]['JobStartTimeStamp']['N'])
             jsonresponse['JobCompleteTimeStamp'] = int(response['Items'][0]['JobCompleteTimeStamp']['N'])
+            jsonresponse['NumPages'] = int(response['Items'][0]['NumPages']['N'])
+            jsonresponse['NumTables'] = int(response['Items'][0]['NumTables']['N'])
+            jsonresponse['NumFields'] = int(response['Items'][0]['NumFields']['N'])            
+            tableFiles = []
+            for tableFile in response['Items'][0]['TableFiles']['L']:
+                tableFiles.append(tableFile['S'])
+            jsonresponse['TableFiles'] = tableFiles
+            formFiles = []
+            for formFile in response['Items'][0]['FormFiles']['L']:
+                formFiles.append(formFile['S'])            
+            jsonresponse['FormFiles'] = formFiles                 
             
     except Exception as e:
         print('DynamoDB Read Error is: {0}'.format(e))  
@@ -729,10 +746,12 @@ def async_submit_handler(event, context):
                     'DocumentBucket':{'Value': {'S':bucket}},
                     'DocumentKey':{'Value': {'S':document}},
                     'UploadPrefix':{'Value': {'S':upload_prefix}},
-                    'DocumentName':{'Value': {'S':document_name}},
-                    'DocumentType':{'Value': {'S':document_type}},
+                    'DocumentName':{'Value': {'S':document_name}},                        
                     'JobStartTimeStamp':{'Value': {'N':str(jobStartTimeStamp)}},
                     'JobCompleteTimeStamp':{'Value': {'N':'0'}},
+                    'NumPages':{'Value': {'N':'0'}},
+                    'NumTables':{'Value': {'N':'0'}},
+                    'NumFields':{'Value': {'N':'0'}},                        
                     'TableFiles':{'Value': {'L':[]}},
                     'FormFiles':{'Value': {'L':[]}}
                 }
@@ -761,7 +780,8 @@ def postprocess_table_handler(event, context):
         print("{} messages recieved".format(numRecords))
         for record in records:
             documentBlocks = None
-            num_tables = -1      
+            num_pages = 0
+            num_tables = 0    
             bucket = ""
             upload_prefix = ""            
             textractJobId = ""
@@ -772,7 +792,7 @@ def postprocess_table_handler(event, context):
             textractS3Bucket = ""            
             if 'Sns' in record.keys():
                 sns = record['Sns']                               
-                print("{} = {}".format("Timestamp", sns['Timestamp']))                
+                print("Message Received from Topic at {}".format("Timestamp", sns['Timestamp']))                
                 if 'Message' in sns.keys():
                     message = json.loads(sns['Message'])
                     textractJobId = message['JobId']
@@ -803,7 +823,7 @@ def postprocess_table_handler(event, context):
 
                     print("upload_prefix = " + upload_prefix)  
 
-                    documentBlocks = GetDocumentAnalysisResult(textract, textractJobId) 
+                    num_pages, documentBlocks = GetDocumentAnalysisResult(textract, textractJobId) 
 
             if documentBlocks is not None:
                 print("{} Blocks retrieved".format(len(documentBlocks)))
@@ -812,8 +832,8 @@ def postprocess_table_handler(event, context):
                 tabledict = extractTableBlocks(documentBlocks)
                 
                 #Generate XML document using table information    
-                tables = generateTableXML(tabledict)        
-                num_tables = len(tables)
+                num_tables, tables = generateTableXML(tabledict)
+                
                 for page in tables:
                     for table in page:
                         html_document = "{}-page-{}-table-{}.html".format(document_name, table.attrib['ContainingPage'], table.attrib['TableNumber'])
@@ -827,11 +847,13 @@ def postprocess_table_handler(event, context):
                                 Key={
                                     'JobId':{'S':textractJobId}
                                 },
-                                ExpressionAttributeNames={"#tf": "TableFiles", "#jct": "JobCompleteTimeStamp"},
-                                UpdateExpression='SET #tf = list_append(#tf, :table_files), #jct = :job_complete',
+                                ExpressionAttributeNames={"#tf": "TableFiles", "#jct": "JobCompleteTimeStamp", "#nt": "NumTables", "#np": "NumPages"},
+                                UpdateExpression='SET #tf = list_append(#tf, :table_files), #jct = :job_complete, #nt = :num_tables, #np = :num_pages',
                                 ExpressionAttributeValues={
                                     ":table_files": {"L": [{"S": "{}/{}".format(upload_prefix,html_document)}]},
-                                    ":job_complete": {"N": str(textractTimestamp)}
+                                    ":job_complete": {"N": str(textractTimestamp)},
+                                    ":num_tables": {"N": str(num_tables)},
+                                    ":num_pages": {"N": str(num_pages)}
                                 }
                             )
                         except Exception as e:
@@ -841,28 +863,18 @@ def postprocess_table_handler(event, context):
             if 'Contents' in s3_result:
                 
                 for key in s3_result['Contents']:
-                    file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))
+                    if key['Key'].endswith("html"):
+                        file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))
                 
                 while s3_result['IsTruncated']:
                     continuation_key = s3_result['NextContinuationToken']
                     s3_result = s3.meta.client.list_objects_v2(Bucket=bucket, Prefix="{}/".format(upload_prefix), Delimiter="/", ContinuationToken=continuation_key)
                     for key in s3_result['Contents']:
-                        file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))            
+                        if key['Key'].endswith("html"):
+                            file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))            
             print(file_list)   
-    
-    jsonresponse = {}
-    jsonresponse['tables'] = []
-    for s3file in file_list:
-        if s3file.endswith("html"):
-            file_handle = s3file[s3file.find(bucket)+len(bucket)+1:]
-            s3_object = s3.Object(bucket,file_handle)
-            s3_response = s3_object.get()
-            xmlstring = s3_response['Body'].read()
-            
-            tablexml = ElementTree.fromstring(xmlstring)
-            jsonresponse['tables'].append(etree_to_dict(tablexml))
         
-    return jsonresponse
+    return file_list
 
 def postprocess_form_handler(event, context):
     
@@ -880,7 +892,8 @@ def postprocess_form_handler(event, context):
         print("{} messages recieved".format(numRecords))
         for record in records:
             documentBlocks = None
-            num_tables = -1      
+            num_pages = 0     
+            num_fields = 0
             bucket = ""
             upload_prefix = ""            
             textractJobId = ""
@@ -892,6 +905,7 @@ def postprocess_form_handler(event, context):
             textractTimestamp = ""            
             if 'Sns' in record.keys():
                 sns = record['Sns']
+                print("Message Received from Topic at {}".format("Timestamp", sns['Timestamp']))
                 if 'Message' in sns.keys():
                     message = json.loads(sns['Message'])
                     textractJobId = message['JobId']
@@ -922,7 +936,7 @@ def postprocess_form_handler(event, context):
 
                     print("upload_prefix = " + upload_prefix)  
 
-                    documentBlocks = GetDocumentAnalysisResult(textract, textractJobId) 
+                    num_pages, documentBlocks = GetDocumentAnalysisResult(textract, textractJobId) 
 
             if documentBlocks is not None:
                 print("{} Blocks retrieved".format(len(documentBlocks)))
@@ -931,6 +945,7 @@ def postprocess_form_handler(event, context):
                 blocks = groupBlocksByType(documentBlocks)
                 formKeys, formValues = extractKeyValuePairs(blocks)
                 pageWords = extractWords(blocks)
+                num_fields = len(formKeys.keys())
         
                 #Generate JSON document using form fields information  
                 formEntries = generateFormEntries(formKeys, formValues, pageWords)   
@@ -947,11 +962,13 @@ def postprocess_form_handler(event, context):
                         Key={
                             'JobId':{'S':textractJobId}
                         },
-                        ExpressionAttributeNames={"#ff": "FormFiles", "#jct": "JobCompleteTimeStamp"},
-                        UpdateExpression='SET #ff = list_append(#ff, :form_files), #jct = :job_complete',
+                        ExpressionAttributeNames={"#ff": "FormFiles", "#jct": "JobCompleteTimeStamp", "#nf": "NumFields", "#np": "NumPages"},
+                        UpdateExpression='SET #ff = list_append(#ff, :form_files), #jct = :job_complete, #nf = :num_fields, #np = :num_pages',
                         ExpressionAttributeValues={
                             ":form_files": {"L": [{"S": "{}/{}".format(upload_prefix,json_document)}]},
-                            ":job_complete": {"N": str(textractTimestamp)}
+                            ":job_complete": {"N": str(textractTimestamp)},
+                            ":num_fields": {"N": str(num_fields)},
+                            ":num_pages": {"N": str(num_pages)}
                         }
                     )
                 except Exception as e:
@@ -962,25 +979,100 @@ def postprocess_form_handler(event, context):
             if 'Contents' in s3_result:
                 
                 for key in s3_result['Contents']:
-                    file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))
+                    if key['Key'].endswith("json"):
+                        file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))
                 
                 while s3_result['IsTruncated']:
                     continuation_key = s3_result['NextContinuationToken']
                     s3_result = s3.meta.client.list_objects_v2(Bucket=bucket, Prefix="{}/".format(upload_prefix), Delimiter="/", ContinuationToken=continuation_key)
                     for key in s3_result['Contents']:
-                        file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))            
+                        if key['Key'].endswith("json"):
+                            file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))            
         
             print(file_list)   
-    
+        
+    return file_list
+
+
+def result_retrieval_handler(event, context):    
+    s3 = boto3.resource('s3')
+    textract = boto3.client('textract')
+    dynamodb = boto3.resource('dynamodb')
+    table_name=os.environ['table_name']
+    table = dynamodb.Table(table_name)    
+   
+    documentBucket = event['DocumentBucket']
+    documentKey = event['DocumentKey']
+    resultType = "ALL"
+    if 'ResultType' in event:
+        resultType = event['ResultType'].upper()
+    print("Invoking retrieval function for result type {}".format(resultType))
     jsonresponse = {}
-    for s3file in file_list:
-        if s3file.endswith("json"):
-            file_handle = s3file[s3file.find(bucket)+len(bucket)+1:]
-            s3_object = s3.Object(bucket,file_handle)
+    if resultType != "ALL" and resultType != "TABLE" and resultType != "FORM":
+        jsonresponse["Error"] = "Invalid Result Type {}".format(resultType)
+        return jsonresponse
+
+    item = None
+    jobStartTimeStamp = None
+    jobCompleteTimeStamp = None  
+
+    try:
+        response = table.scan(
+            FilterExpression = "DocumentBucket = :bucket and DocumentKey = :key",
+            ExpressionAttributeValues = {
+                ":bucket": documentBucket,
+                ":key": documentKey
+            }
+        )
+        print(len(response['Items']))
+        item = response['Items'][-1]
+    except Exception as e:
+        print('Actual error is: {0}'.format(e))
+
+    if item is not None:
+        jsonresponse['JobId'] = item['JobId']
+        jobStartTimeStamp = item['JobStartTimeStamp']
+        jsonresponse['JobStartTimeStamp'] = str(jobStartTimeStamp)
+        jobCompleteTimeStamp = item['JobCompleteTimeStamp']
+        jsonresponse['JobCompleteTimeStamp'] = str(jobCompleteTimeStamp)
+        if jobCompleteTimeStamp <= jobStartTimeStamp:
+            jsonresponse['JobStatus'] = "IN PROGRESS"
+        else:
+            jsonresponse['JobStatus'] = "COMPLETED"
+        documentBucket = item['DocumentBucket']
+        jsonresponse['DocumentBucket'] = documentBucket
+        documentKey = item['DocumentKey']
+        jsonresponse['DocumentKey'] = documentKey
+        jsonresponse['DocumentName'] = item['DocumentName']
+        jsonresponse['DocumentType'] = item['DocumentType']
+        jsonresponse['UploadPrefix'] = item['UploadPrefix']
+        jsonresponse['NumPages'] = str(item['NumPages'])
+        jsonresponse['NumTables'] = str(item['NumTables'])
+        jsonresponse['NumFields'] = str(item['NumFields'])                
+    
+    if resultType == "FORM" or resultType == "ALL":
+        formFiles = item['FormFiles']
+        print("Form Fields stored in {} files".format(len(formFiles)))
+        for formFile in formFiles:
+            s3_object = s3.Object(documentBucket,formFile)
+            print("Reading Form fields from {}".format(formFile))
             s3_response = s3_object.get()
             jsonstring = s3_response['Body'].read()
 
             formjson = json.loads(jsonstring)
-            jsonresponse['formfields'] = formjson
-        
+            jsonresponse['formfields'] = formjson    
+
+    if resultType == "TABLE" or resultType == "ALL":
+        tableFiles = item['TableFiles']
+        jsonresponse['tables'] = []     
+        print("Table data stored in {} files".format(len(tableFiles)))
+        for tableFile in tableFiles:
+            s3_object = s3.Object(documentBucket,tableFile)
+            print("Reading Form fields from {}".format(tableFile))
+            s3_response = s3_object.get()
+            xmlstring = s3_response['Body'].read()
+
+            tablexml = ElementTree.fromstring(xmlstring)
+            jsonresponse['tables'].append(etree_to_dict(tablexml))
+
     return jsonresponse

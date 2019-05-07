@@ -16,10 +16,11 @@ def GetDocumentAnalysisResult(textract, jobId):
     finished = False 
     retryInterval = int(os.environ['retry_interval']) #30
     maxRetryAttempt = int(os.environ['max_retry_attempt']) #5
-    retryCount = 0
+
     result = []
 
     while finished == False:
+        retryCount = 0
 
         try:
             if paginationToken is None:
@@ -29,32 +30,13 @@ def GetDocumentAnalysisResult(textract, jobId):
                 response = textract.get_document_analysis(JobId=jobId,
                                                 MaxResults=maxResults,
                                                 NextToken=paginationToken)
-        except Exception as e:
-            exceptionType = str(type(e))
-            if exceptionType.find("AccessDeniedException") > 0:
-                finished = True
-                print("You aren't authorized to perform textract.analyze_document action.")    
-            elif exceptionType.find("InvalidJobIdException") > 0:
-                finished = True
-                print("An invalid job identifier was passed.")   
-            elif exceptionType.find("InvalidParameterException") > 0:
-                finished = True
-                print("An input parameter violated a constraint.")        
+        except :
+            if retryCount < maxRetryAttempt:
+                retryCount = retryCount + 1
+                print("Result retrieval failed, retrying after {} seconds".format(retryInterval))            
+                time.sleep(retryInterval)
             else:
-                if retryCount < maxRetryAttempt:
-                    retryCount = retryCount + 1
-                else:
-                    print(e)
-                    print("Result retrieval failed, after {} retry, aborting".format(maxRetryAttempt))                       
-                if exceptionType.find("InternalServerError") > 0:
-                    print("Amazon Textract experienced a service issue. Trying in {} seconds.".format(retryInterval))   
-                    time.sleep(retryInterval)
-                elif exceptionType.find("ProvisionedThroughputExceededException") > 0:
-                    print("The number of requests exceeded your throughput limit. Trying in {} seconds.".format(retryInterval*3))
-                    time.sleep(retryInterval*3)
-                elif exceptionType.find("ThrottlingException") > 0:
-                    print("Amazon Textract is temporarily unable to process the request. Trying in {} seconds.".format(retryInterval*6))
-                    time.sleep(retryInterval*6)       
+                print("Result retrieval failed, after {} retry, aborting".format(maxRetryAttempt))             
 
         #Get the text blocks
         blocks=response['Blocks']
@@ -69,7 +51,7 @@ def GetDocumentAnalysisResult(textract, jobId):
                 paginationToken = None
                 finished = True  
     
-    return result
+    return response['DocumentMetadata']['Pages'], result
 
 #Function to extract table information from the raw JSON returned by Textract
 def extractTableBlocks(json):
@@ -169,6 +151,7 @@ def extractTableBlocks(json):
 #Function to genrate table structure in XML, that can be rendered as HTML table
 def generateTableXML(tabledict):
     tables = []
+    num_tables = len(tabledict.keys())
     for tkey in tabledict.keys():
         containingPage = tabledict[tkey]['ContainingPage']
         table = Element('table')
@@ -187,30 +170,7 @@ def generateTableXML(tabledict):
             tables.append([])
         table.set('TableNumber', str(len(tables[containingPage - 1]) + 1))
         tables[containingPage - 1].append(table)
-    return tables
-
-#Convert XML Tables to JSON    
-def etree_to_dict(t):
-    d = {t.tag: {} if t.attrib else None}
-    children = list(t)
-    if children:
-        dd = defaultdict(list)
-        for dc in map(etree_to_dict, children):
-            for k, v in dc.items():
-                dd[k].append(v)
-        d = {t.tag: {k: v[0] if len(v) == 1 else v
-                     for k, v in dd.items()}}
-    if t.attrib:
-        d[t.tag].update(('@' + k, v)
-                        for k, v in t.attrib.items())
-    if t.text:
-        text = t.text.strip()
-        if children or t.attrib:
-            if text:
-              d[t.tag]['#text'] = text
-        else:
-            d[t.tag] = text
-    return d
+    return num_tables, tables
     
 #Function to prettify XML    
 def prettify(elem):
@@ -219,37 +179,42 @@ def prettify(elem):
     return reparsed.toprettyxml(indent="  ")    
 
 def lambda_handler(event, context):
-    
     #Initialize Boto Resource	
     s3 = boto3.resource('s3')
     textract = boto3.client('textract')
-    documentBlocks = None
-    bucket = ""
-    upload_prefix = ""
-    num_tables = -1
+    dynamodb = boto3.client('dynamodb')
+    table_name=os.environ['table_name']    
     file_list = []
 
     if "Records" in event:        
         records = event['Records']
         numRecords = len(records)
-        textractJobId = ""
-        textractStatus = ""
-        textractAPI = ""
-        textractJobTag = ""
-        textractS3ObjectName = ""
-        textractS3Bucket = ""
+        
         print("{} messages recieved".format(numRecords))
         for record in records:
+            print(record)
+            documentBlocks = None
+            num_pages = 0
+            num_tables = 0      
+            bucket = ""
+            upload_prefix = ""            
+            textractJobId = ""
+            textractStatus = ""
+            textractAPI = ""
+            textractJobTag = ""
+            textractS3ObjectName = ""
+            textractS3Bucket = ""  
+            textractTimestamp = ""
             if 'Sns' in record.keys():
-                sns = record['Sns']
-                textractTimestamp =  sns['Timestamp']                  
-                print("{} = {}".format("Timestamp", sns['Timestamp']))                
+                sns = record['Sns'] 
                 if 'Message' in sns.keys():
                     message = json.loads(sns['Message'])
                     textractJobId = message['JobId']
                     print("{} = {}".format("JobId", textractJobId))
                     textractStatus = message['Status']
-                    print("{} = {}".format("Status",textractStatus))        
+                    print("{} = {}".format("Status",textractStatus))   
+                    textractTimestamp =  str(int(float(message['Timestamp'])/1000))    
+                    print("{} = {}".format("Timestamp",textractTimestamp))     
                     textractAPI = message['API']
                     print("{} = {}".format("API", textractAPI))                    
                     textractJobTag = message['JobTag']
@@ -258,12 +223,13 @@ def lambda_handler(event, context):
                     textractS3ObjectName = documentLocation['S3ObjectName']
                     print("{} = {}".format("S3ObjectName", textractS3ObjectName))    
                     textractS3Bucket = documentLocation['S3Bucket']
-                    print("{} = {}".format("S3Bucket", textractS3Bucket))      
+                    print("{} = {}".format("S3Bucket", textractS3Bucket))                          
                     
                     bucket = textractS3Bucket
                     document_path = textractS3ObjectName[:textractS3ObjectName.rfind("/")] if textractS3ObjectName.find("/") >= 0 else ""
-                    document_name = textractS3ObjectName[textractS3ObjectName.rfind("/")+1:textractS3ObjectName.rfind(".")]     
-
+                    document_name = textractS3ObjectName[textractS3ObjectName.rfind("/")+1:textractS3ObjectName.rfind(".")] if textractS3ObjectName.find("/") >= 0 else textractS3ObjectName[:textractS3ObjectName.rfind(".")]
+                    document_type = textractS3ObjectName[textractS3ObjectName.rfind(".")+1:].upper()
+                    
                     if document_path == "":
                         upload_prefix = textractJobId
                     else:
@@ -271,49 +237,56 @@ def lambda_handler(event, context):
 
                     print("upload_prefix = " + upload_prefix)  
 
-                    documentBlocks = GetDocumentAnalysisResult(textract, textractJobId) 
+                    num_pages, documentBlocks = GetDocumentAnalysisResult(textract, textractJobId) 
 
-    if documentBlocks is not None:
-        print("{} Blocks retrieved".format(len(documentBlocks)))
+            if documentBlocks is not None:
+                print("{} Blocks retrieved".format(len(documentBlocks)))
 
-        #Extract table information  into a Python dictionary by parsing the raw JSON from Textract
-        tabledict = extractTableBlocks(documentBlocks)
-        
-        #Generate XML document using table information    
-        tables = generateTableXML(tabledict)        
-        num_tables = len(tables)
+                #Extract table information  into a Python dictionary by parsing the raw JSON from Textract
+                tabledict = extractTableBlocks(documentBlocks)
+                
+                #Generate XML document using table information    
+                num_tables, tables = generateTableXML(tabledict)
+                
+                for page in tables:
+                    for table in page:
+                        html_document = "{}-page-{}-table-{}.html".format(document_name, table.attrib['ContainingPage'], table.attrib['TableNumber'])
+                        html_file = open("/tmp/"+html_document,'w+')
+                        html_file.write(prettify(table))
+                        html_file.close()
+                        s3.meta.client.upload_file("/tmp/"+html_document, bucket, "{}/{}".format(upload_prefix,html_document))  
+                        try:
+                            response = dynamodb.update_item(
+                                TableName=table_name,
+                                Key={
+                                    'JobId':{'S':textractJobId}
+                                },
+                                ExpressionAttributeNames={"#tf": "TableFiles", "#jct": "JobCompleteTimeStamp", "#nt": "NumTables", "#np": "NumPages"},
+                                UpdateExpression='SET #tf = list_append(#tf, :table_files), #jct = :job_complete, #nt = :num_tables, #np = :num_pages',
+                                ExpressionAttributeValues={
+                                    ":table_files": {"L": [{"S": "{}/{}".format(upload_prefix,html_document)}]},
+                                    ":job_complete": {"N": str(textractTimestamp)},
+                                    ":num_tables": {"N": str(num_tables)},
+                                    ":num_pages": {"N": str(num_pages)}
+                                }
+                            )
+                        except Exception as e:
+                            print('DynamoDB Insertion Error is: {0}'.format(e))
 
-        for page in tables:
-            for table in page:
-                html_document = "{}-page-{}-table-{}.html".format(document_name, table.attrib['ContainingPage'], table.attrib['TableNumber'])
-                html_file = open("/tmp/"+html_document,'w+')
-                html_file.write(prettify(table))
-                html_file.close()
-                s3.meta.client.upload_file("/tmp/"+html_document, bucket, "{}/{}".format(upload_prefix,html_document))            
            
-    s3_result = s3.meta.client.list_objects_v2(Bucket=bucket, Prefix="{}/".format(upload_prefix), Delimiter = "/")
-    if 'Contents' in s3_result:
+            s3_result = s3.meta.client.list_objects_v2(Bucket=bucket, Prefix="{}/".format(upload_prefix), Delimiter = "/")
+            if 'Contents' in s3_result:
+                
+                for key in s3_result['Contents']:
+                    if key['Key'].endswith("html"):
+                        file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))
+                
+                while s3_result['IsTruncated']:
+                    continuation_key = s3_result['NextContinuationToken']
+                    s3_result = s3.meta.client.list_objects_v2(Bucket=bucket, Prefix="{}/".format(upload_prefix), Delimiter="/", ContinuationToken=continuation_key)
+                    for key in s3_result['Contents']:
+                        if key['Key'].endswith("html"):
+                            file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))            
+            print(file_list)   
         
-        for key in s3_result['Contents']:
-            file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))
-        
-        while s3_result['IsTruncated']:
-            continuation_key = s3_result['NextContinuationToken']
-            s3_result = s3.meta.client.list_objects_v2(Bucket=bucket, Prefix="{}/".format(upload_prefix), Delimiter="/", ContinuationToken=continuation_key)
-            for key in s3_result['Contents']:
-                file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))            
-    print(file_list)   
-    
-    jsonresponse = {}
-    jsonresponse['tables'] = []
-    for s3file in file_list:
-        if s3file.endswith("html"):
-            file_handle = s3file[s3file.find(bucket)+len(bucket)+1:]
-            s3_object = s3.Object(bucket,file_handle)
-            s3_response = s3_object.get()
-            xmlstring = s3_response['Body'].read()
-            
-            tablexml = ElementTree.fromstring(xmlstring)
-            jsonresponse['tables'].append(etree_to_dict(tablexml))
-        
-    return jsonresponse
+    return file_list
