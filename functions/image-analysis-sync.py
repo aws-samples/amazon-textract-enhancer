@@ -3,7 +3,6 @@ import os
 import json
 import time
 import boto3
-from datetime import datetime
 from io import BytesIO
 from xml.dom import minidom
 from xml.etree import ElementTree
@@ -32,33 +31,13 @@ def GetDocumentAnalysisResult(textract, jobId):
                 response = textract.get_document_analysis(JobId=jobId,
                                                 MaxResults=maxResults,
                                                 NextToken=paginationToken)
-        except Exception as e:
-            exceptionType = str(type(e))
-            if exceptionType.find("AccessDeniedException") > 0:
-                finished = True
-                print("You aren't authorized to perform textract.analyze_document action.")    
-            elif exceptionType.find("InvalidJobIdException") > 0:
-                finished = True
-                print("An invalid job identifier was passed.")   
-            elif exceptionType.find("InvalidParameterException") > 0:
-                finished = True
-                print("An input parameter violated a constraint.")        
+        except :
+            if retryCount < maxRetryAttempt:
+                retryCount = retryCount + 1
+                print("Result retrieval failed, retrying after {} seconds".format(retryInterval))            
+                time.sleep(retryInterval)
             else:
-                if retryCount < maxRetryAttempt:
-                    retryCount = retryCount + 1
-                else:
-                    print(e)
-                    print("Result retrieval failed, after {} retry, aborting".format(maxRetryAttempt))                       
-                if exceptionType.find("InternalServerError") > 0:
-                    print("Amazon Textract experienced a service issue. Trying in {} seconds.".format(retryInterval))   
-                    time.sleep(retryInterval)
-                elif exceptionType.find("ProvisionedThroughputExceededException") > 0:
-                    print("The number of requests exceeded your throughput limit. Trying in {} seconds.".format(retryInterval*3))
-                    time.sleep(retryInterval*3)
-                elif exceptionType.find("ThrottlingException") > 0:
-                    print("Amazon Textract is temporarily unable to process the request. Trying in {} seconds.".format(retryInterval*6))
-                    time.sleep(retryInterval*6)
-          
+                print("Result retrieval failed, after {} retry, aborting".format(maxRetryAttempt))             
 
         #Get the text blocks
         blocks=response['Blocks']
@@ -73,7 +52,7 @@ def GetDocumentAnalysisResult(textract, jobId):
                 paginationToken = None
                 finished = True  
     
-    return response['DocumentMetadata']['Pages'], result
+    return result
 
 #Function to extract table information from the raw JSON returned by Textract
 def extractTableBlocks(json):
@@ -173,7 +152,6 @@ def extractTableBlocks(json):
 #Function to genrate table structure in XML, that can be rendered as HTML table
 def generateTableXML(tabledict):
     tables = []
-    num_tables = len(tabledict.keys())
     for tkey in tabledict.keys():
         containingPage = tabledict[tkey]['ContainingPage']
         table = Element('table')
@@ -192,7 +170,7 @@ def generateTableXML(tabledict):
             tables.append([])
         table.set('TableNumber', str(len(tables[containingPage - 1]) + 1))
         tables[containingPage - 1].append(table)
-    return num_tables, tables
+    return tables
 
 #Convert XML Tables to JSON    
 def etree_to_dict(t):
@@ -444,13 +422,20 @@ def detachExternalBucketPolicy(bucketAccessPolicyArn, event):
         )
         print("Policy - {} deleted".format(bucketAccessPolicyArn))    
 
-def sync_call_handler(event, context): 
-        
+
+def lambda_handler(event, context):
+    
+    print(event)
     #Initialize Boto Resource	
     s3 = boto3.resource('s3')
     textract = boto3.client('textract')
-    dynamodb = boto3.client('dynamodb')
-    table_name=os.environ['table_name']
+    sqs = boto3.client('sqs')
+    
+    tokenPrefix = os.environ['token_prefix']  
+
+    queueUrl = os.environ['queue_url'] 
+    roleArn = os.environ['role_arn']
+    topicArn = os.environ['topic_arn'] 
 
     retryCount = 0
     retryInterval = int(os.environ['retry_interval']) #30
@@ -496,7 +481,7 @@ def sync_call_handler(event, context):
             documentBlocks = response['Blocks']           
             print("RequestId: {}, Status: {}, Pages Processed: {}".format(jobId,
                                                                         response['ResponseMetadata']['HTTPStatusCode'],
-                                                                        response['DocumentMetadata']['Pages']))                                                                                                   
+                                                                        response['DocumentMetadata']['Pages']))                               
         except Exception as e:
             exceptionType = str(type(e))
             if exceptionType.find("AccessDeniedException") > 0:
@@ -530,6 +515,7 @@ def sync_call_handler(event, context):
                     time.sleep(retryInterval*6)
         else:
             retryCount = -1   
+            
     if document_path == "":
         upload_prefix = jobId
     else:
@@ -558,7 +544,8 @@ def sync_call_handler(event, context):
         tabledict = extractTableBlocks(documentBlocks)
         
         #Generate XML document using table information    
-        num_tables, tables = generateTableXML(tabledict)        
+        tables = generateTableXML(tabledict)        
+        num_tables = len(tables)
 
         for page in tables:
             for table in page:
@@ -607,472 +594,4 @@ def sync_call_handler(event, context):
     if bucketAccessPolicyArn is not None:
         detachExternalBucketPolicy(bucketAccessPolicyArn, event)
         
-    return jsonresponse
-
-def async_submit_handler(event, context):
-    
-    print(event)
-    
-    #Initialize Boto Resource	
-    s3 = boto3.resource('s3')
-    textract = boto3.client('textract')
-    dynamodb = boto3.client('dynamodb')
-    table_name=os.environ['table_name']
-    tokenPrefix = os.environ['token_prefix']  
-
-    roleArn = os.environ['role_arn']
-    topicArn = os.environ['topic_arn'] 
-
-    retryCount = 0
-    retryInterval = int(os.environ['retry_interval']) #30
-    maxRetryAttempt = int(os.environ['max_retry_attempt']) #5
-    
-    external_bucket = ""
-    bucket = ""
-    document = ""
-    jobId = ""
-    jobStartTimeStamp = 0
-    jobCompleteTimeStamp = 0
-    jsonresponse = {}
-    bucketAccessPolicyArn = None
-    
-    if 'ExternalBucketName' in event:
-        bucketAccessPolicyArn = attachExternalBucketPolicy(event['ExternalBucketName'])
-        external_bucket = event['ExternalBucketName']
-        
-    if "Records" in event:        
-        record, = event["Records"]        
-        print(record)
-        bucket = record['s3']['bucket']['name']
-        document = record['s3']['object']['key']
-    else:
-        bucket = event['ExternalBucketName']
-        document = event['ExternalDocumentPrefix']   
-        
-    if bucket == "" or  document == "":
-        print("Bucket and/or Document not specified, nothing to do.")
-        return jsonresponse
-
-    document_path = document[:document.rfind("/")] if document.find("/") >= 0 else ""
-    document_name = document[document.rfind("/")+1:document.rfind(".")] if document.find("/") >= 0 else document[:document.rfind(".")]
-    document_type = document[document.rfind(".")+1:].upper()
-        
-    #Submit Document Anlysis job to Textract to extract text features    
-    while retryCount >= 0 and retryCount < maxRetryAttempt:
-        try:
-            response = textract.start_document_analysis(
-                                    ClientRequestToken = "{}-{}".format(tokenPrefix, document.replace("/","_").replace(".","-")),
-                                    DocumentLocation={'S3Object': {'Bucket': bucket, 'Name': document}},
-                                    FeatureTypes=["TABLES", "FORMS"],
-                                    NotificationChannel={'SNSTopicArn': topicArn,'RoleArn': roleArn},
-                                    JobTag = "AnalyzeText-{}".format(document[document.rfind("/")+1:document.rfind(".")]))
-            jobId = response['JobId']
-            jobStartTimeStamp = datetime.strptime(response['ResponseMetadata']['HTTPHeaders']['date'], '%a, %d %b %Y %H:%M:%S %Z').timestamp()
-            print("Textract Request: {} submitted at {} with JobId - {}".format(
-                response['ResponseMetadata']['RequestId'], jobStartTimeStamp,jobId))    
-            
-            print("Starting Job Id: {}".format(jobId))        
-        except Exception as e:
-            print(e)
-            if retryCount < maxRetryAttempt - 1:
-                retryCount = retryCount + 1
-                print("Job submission failed, retrying after {} seconds".format(retryInterval))            
-                time.sleep(retryInterval)
-            else:
-                print("Job submission failed, after {} retry, aborting".format(maxRetryAttempt))
-                retryCount = -1
-                return jsonresponse
-        else:
-            retryCount = -1   
-
-    if document_path == "":
-        upload_prefix = jobId
-    else:
-        upload_prefix = "{}/{}".format(document_path, jobId)
-
-
-    jsonresponse = {
-        'JobId': jobId,
-        'DocumentBucket': bucket,
-        'DocumentKey': document,
-        'UploadPrefix': upload_prefix,        
-        'DocumentName':document_name,
-        'DocumentType':document_type,
-        'JobStartTimeStamp': str(jobStartTimeStamp),
-        'JobCompleteTimeStamp': '0',
-        'NumPages': '0',
-        'NumTables': '0',
-        'NumFields': '0',        
-        'TableFiles': [],
-        'FormFiles': []        
-    }
-    
-    recordExists = False
-    
-    try:
-        response = dynamodb.scan(
-            TableName=table_name,
-            ExpressionAttributeNames={'#ID': 'JobId'},
-            ExpressionAttributeValues={':jobId' : {'S': jobId}},
-            FilterExpression='#ID = :jobId'
-        )      
-        if response['Count'] > 0:
-            recordExists = True
-            item = response['Items'][-1]
-            jsonresponse['JobStartTimeStamp'] = int(item['JobStartTimeStamp']['N'])
-            jsonresponse['JobCompleteTimeStamp'] = int(item['JobCompleteTimeStamp']['N'])
-            jsonresponse['NumPages'] = int(item['NumPages']['N'])
-            jsonresponse['NumTables'] = int(item['NumTables']['N'])
-            jsonresponse['NumFields'] = int(item['NumFields']['N'])            
-            tableFiles = []            
-            for tableFile in item['TableFiles']['L']:
-                tableFiles.append(tableFile['S'])
-            jsonresponse['TableFiles'] = tableFiles
-            formFiles = []
-            for formFile in item['FormFiles']['L']:
-                formFiles.append(formFile['S'])            
-            jsonresponse['FormFiles'] = formFiles                 
-            
-    except Exception as e:
-        print('DynamoDB Read Error is: {0}'.format(e))  
-    
-    if not recordExists:
-        try:
-            response = dynamodb.update_item(
-                TableName=table_name,
-                Key={
-                    'JobId':{'S':jobId}
-                },
-                AttributeUpdates={
-                    'DocumentBucket':{'Value': {'S':bucket}},
-                    'DocumentKey':{'Value': {'S':document}},
-                    'UploadPrefix':{'Value': {'S':upload_prefix}},
-                    'DocumentName':{'Value': {'S':document_name}},                        
-                    'JobStartTimeStamp':{'Value': {'N':str(jobStartTimeStamp)}},
-                    'JobCompleteTimeStamp':{'Value': {'N':'0'}},
-                    'NumPages':{'Value': {'N':'0'}},
-                    'NumTables':{'Value': {'N':'0'}},
-                    'NumFields':{'Value': {'N':'0'}},                        
-                    'TableFiles':{'Value': {'L':[]}},
-                    'FormFiles':{'Value': {'L':[]}}
-                }
-            )
-        except Exception as e:
-            print('DynamoDB Insertion Error is: {0}'.format(e))
-
-    if bucketAccessPolicyArn is not None:
-        detachExternalBucketPolicy(bucketAccessPolicyArn, event)
-        
-    return jsonresponse
-
-def postprocess_table_handler(event, context):
-    
-    #Initialize Boto Resource	
-    s3 = boto3.resource('s3')
-    textract = boto3.client('textract')
-    dynamodb = boto3.client('dynamodb')
-    table_name=os.environ['table_name']    
-    file_list = []
-
-    if "Records" in event:        
-        records = event['Records']
-        numRecords = len(records)
-        
-        print("{} messages recieved".format(numRecords))
-        for record in records:
-            documentBlocks = None
-            num_pages = 0
-            num_tables = 0    
-            bucket = ""
-            upload_prefix = ""            
-            textractJobId = ""
-            textractStatus = ""
-            textractAPI = ""
-            textractJobTag = ""
-            textractS3ObjectName = ""
-            textractS3Bucket = ""            
-            if 'Sns' in record.keys():
-                sns = record['Sns']                               
-                print("Message Received from Topic at {}".format("Timestamp", sns['Timestamp']))                
-                if 'Message' in sns.keys():
-                    message = json.loads(sns['Message'])
-                    textractJobId = message['JobId']
-                    print("{} = {}".format("JobId", textractJobId))
-                    textractStatus = message['Status']
-                    print("{} = {}".format("Status",textractStatus))   
-                    textractTimestamp =  str(int(float(message['Timestamp'])/1000)) 
-                    print("{} = {}".format("Timestamp",textractTimestamp))     
-                    textractAPI = message['API']
-                    print("{} = {}".format("API", textractAPI))                    
-                    textractJobTag = message['JobTag']
-                    print("{} = {}".format("JobTag", textractJobTag))    
-                    documentLocation = message['DocumentLocation']
-                    textractS3ObjectName = documentLocation['S3ObjectName']
-                    print("{} = {}".format("S3ObjectName", textractS3ObjectName))    
-                    textractS3Bucket = documentLocation['S3Bucket']
-                    print("{} = {}".format("S3Bucket", textractS3Bucket))                          
-                    
-                    bucket = textractS3Bucket
-                    document_path = textractS3ObjectName[:textractS3ObjectName.rfind("/")] if textractS3ObjectName.find("/") >= 0 else ""
-                    document_name = textractS3ObjectName[textractS3ObjectName.rfind("/")+1:textractS3ObjectName.rfind(".")] if textractS3ObjectName.find("/") >= 0 else textractS3ObjectName[:textractS3ObjectName.rfind(".")]
-                    document_type = textractS3ObjectName[textractS3ObjectName.rfind(".")+1:].upper()
-
-                    if document_path == "":
-                        upload_prefix = textractJobId
-                    else:
-                        upload_prefix = "{}/{}".format(document_path, textractJobId)
-
-                    print("upload_prefix = " + upload_prefix)  
-
-                    num_pages, documentBlocks = GetDocumentAnalysisResult(textract, textractJobId) 
-
-            if documentBlocks is not None:
-                print("{} Blocks retrieved".format(len(documentBlocks)))
-
-                #Extract table information  into a Python dictionary by parsing the raw JSON from Textract
-                tabledict = extractTableBlocks(documentBlocks)
-                
-                #Generate XML document using table information    
-                num_tables, tables = generateTableXML(tabledict)
-                
-                for page in tables:
-                    for table in page:
-                        html_document = "{}-page-{}-table-{}.html".format(document_name, table.attrib['ContainingPage'], table.attrib['TableNumber'])
-                        html_file = open("/tmp/"+html_document,'w+')
-                        html_file.write(prettify(table))
-                        html_file.close()
-                        s3.meta.client.upload_file("/tmp/"+html_document, bucket, "{}/{}".format(upload_prefix,html_document))  
-                        try:
-                            response = dynamodb.update_item(
-                                TableName=table_name,
-                                Key={
-                                    'JobId':{'S':textractJobId}
-                                },
-                                ExpressionAttributeNames={"#tf": "TableFiles", "#jct": "JobCompleteTimeStamp", "#nt": "NumTables", "#np": "NumPages"},
-                                UpdateExpression='SET #tf = list_append(#tf, :table_files), #jct = :job_complete, #nt = :num_tables, #np = :num_pages',
-                                ExpressionAttributeValues={
-                                    ":table_files": {"L": [{"S": "{}/{}".format(upload_prefix,html_document)}]},
-                                    ":job_complete": {"N": str(textractTimestamp)},
-                                    ":num_tables": {"N": str(num_tables)},
-                                    ":num_pages": {"N": str(num_pages)}
-                                }
-                            )
-                        except Exception as e:
-                            print('DynamoDB Insertion Error is: {0}'.format(e))
-           
-            s3_result = s3.meta.client.list_objects_v2(Bucket=bucket, Prefix="{}/".format(upload_prefix), Delimiter = "/")
-            if 'Contents' in s3_result:
-                
-                for key in s3_result['Contents']:
-                    if key['Key'].endswith("html"):
-                        file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))
-                
-                while s3_result['IsTruncated']:
-                    continuation_key = s3_result['NextContinuationToken']
-                    s3_result = s3.meta.client.list_objects_v2(Bucket=bucket, Prefix="{}/".format(upload_prefix), Delimiter="/", ContinuationToken=continuation_key)
-                    for key in s3_result['Contents']:
-                        if key['Key'].endswith("html"):
-                            file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))            
-            print(file_list)   
-        
-    return file_list
-
-def postprocess_form_handler(event, context):
-    
-    #Initialize Boto Resource	
-    s3 = boto3.resource('s3')
-    textract = boto3.client('textract')
-    dynamodb = boto3.client('dynamodb')
-    table_name=os.environ['table_name']
-    file_list = []
-
-    if "Records" in event:        
-        records = event['Records']
-        numRecords = len(records)
-
-        print("{} messages recieved".format(numRecords))
-        for record in records:
-            documentBlocks = None
-            num_pages = 0     
-            num_fields = 0
-            bucket = ""
-            upload_prefix = ""            
-            textractJobId = ""
-            textractStatus = ""
-            textractAPI = ""
-            textractJobTag = ""
-            textractS3ObjectName = ""
-            textractS3Bucket = ""  
-            textractTimestamp = ""            
-            if 'Sns' in record.keys():
-                sns = record['Sns']
-                print("Message Received from Topic at {}".format("Timestamp", sns['Timestamp']))
-                if 'Message' in sns.keys():
-                    message = json.loads(sns['Message'])
-                    textractJobId = message['JobId']
-                    print("{} = {}".format("JobId", textractJobId))
-                    textractStatus = message['Status']
-                    print("{} = {}".format("Status",textractStatus)) 
-                    textractTimestamp =  str(int(float(message['Timestamp'])/1000))
-                    print("{} = {}".format("Timestamp",textractTimestamp))                         
-                    textractAPI = message['API']
-                    print("{} = {}".format("API", textractAPI))                    
-                    textractJobTag = message['JobTag']
-                    print("{} = {}".format("JobTag", textractJobTag))    
-                    documentLocation = message['DocumentLocation']
-                    textractS3ObjectName = documentLocation['S3ObjectName']
-                    print("{} = {}".format("S3ObjectName", textractS3ObjectName))    
-                    textractS3Bucket = documentLocation['S3Bucket']
-                    print("{} = {}".format("S3Bucket", textractS3Bucket))      
-                    
-                    bucket = textractS3Bucket
-                    document_path = textractS3ObjectName[:textractS3ObjectName.rfind("/")] if textractS3ObjectName.find("/") >= 0 else ""
-                    document_name = textractS3ObjectName[textractS3ObjectName.rfind("/")+1:textractS3ObjectName.rfind(".")] if textractS3ObjectName.find("/") >= 0 else textractS3ObjectName[:textractS3ObjectName.rfind(".")]
-                    document_type = textractS3ObjectName[textractS3ObjectName.rfind(".")+1:].upper()                        
-
-                    if document_path == "":
-                        upload_prefix = textractJobId
-                    else:
-                        upload_prefix = "{}/{}".format(document_path, textractJobId)
-
-                    print("upload_prefix = " + upload_prefix)  
-
-                    num_pages, documentBlocks = GetDocumentAnalysisResult(textract, textractJobId) 
-
-            if documentBlocks is not None:
-                print("{} Blocks retrieved".format(len(documentBlocks)))
-        
-                #Extract form fields into a Python dictionary by parsing the raw JSON from Textract
-                blocks = groupBlocksByType(documentBlocks)
-                formKeys, formValues = extractKeyValuePairs(blocks)
-                pageWords = extractWords(blocks)
-                num_fields = len(formKeys.keys())
-        
-                #Generate JSON document using form fields information  
-                formEntries = generateFormEntries(formKeys, formValues, pageWords)   
-        
-                json_document = "{}.json".format(document_name)
-                json_file = open("/tmp/"+json_document,'w+')
-                json_file.write(json.dumps(formEntries, indent=4, sort_keys=True))
-                json_file.close()
-                s3.meta.client.upload_file("/tmp/"+json_document, bucket, "{}/{}".format(upload_prefix,json_document))         
-
-                try:
-                    response = dynamodb.update_item(
-                        TableName=table_name,
-                        Key={
-                            'JobId':{'S':textractJobId}
-                        },
-                        ExpressionAttributeNames={"#ff": "FormFiles", "#jct": "JobCompleteTimeStamp", "#nf": "NumFields", "#np": "NumPages"},
-                        UpdateExpression='SET #ff = list_append(#ff, :form_files), #jct = :job_complete, #nf = :num_fields, #np = :num_pages',
-                        ExpressionAttributeValues={
-                            ":form_files": {"L": [{"S": "{}/{}".format(upload_prefix,json_document)}]},
-                            ":job_complete": {"N": str(textractTimestamp)},
-                            ":num_fields": {"N": str(num_fields)},
-                            ":num_pages": {"N": str(num_pages)}
-                        }
-                    )
-                except Exception as e:
-                    print('DynamoDB Insertion Error is: {0}'.format(e))                            
-                            
-           
-            s3_result = s3.meta.client.list_objects_v2(Bucket=bucket, Prefix="{}/".format(upload_prefix), Delimiter = "/")
-            if 'Contents' in s3_result:
-                
-                for key in s3_result['Contents']:
-                    if key['Key'].endswith("json"):
-                        file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))
-                
-                while s3_result['IsTruncated']:
-                    continuation_key = s3_result['NextContinuationToken']
-                    s3_result = s3.meta.client.list_objects_v2(Bucket=bucket, Prefix="{}/".format(upload_prefix), Delimiter="/", ContinuationToken=continuation_key)
-                    for key in s3_result['Contents']:
-                        if key['Key'].endswith("json"):
-                            file_list.append("https://s3.amazonaws.com/{}/{}".format(bucket, key['Key']))            
-        
-            print(file_list)   
-        
-    return file_list
-
-def result_retrieval_handler(event, context):    
-    s3 = boto3.resource('s3')
-    textract = boto3.client('textract')
-    dynamodb = boto3.resource('dynamodb')
-    table_name=os.environ['table_name']
-    table = dynamodb.Table(table_name)    
-   
-    documentBucket = event['DocumentBucket']
-    documentKey = event['DocumentKey']
-    resultType = "ALL"
-    if 'ResultType' in event:
-        resultType = event['ResultType'].upper()
-    print("Invoking retrieval function for result type {}".format(resultType))
-    jsonresponse = {}
-    if resultType != "ALL" and resultType != "TABLE" and resultType != "FORM":
-        jsonresponse["Error"] = "Invalid Result Type {}".format(resultType)
-        return jsonresponse
-
-    item = None
-    jobStartTimeStamp = None
-    jobCompleteTimeStamp = None  
-
-    try:
-        response = table.scan(
-            FilterExpression = "DocumentBucket = :bucket and DocumentKey = :key",
-            ExpressionAttributeValues = {
-                ":bucket": documentBucket,
-                ":key": documentKey
-            }
-        )
-        print(len(response['Items']))
-        item = response['Items'][-1]
-    except Exception as e:
-        print('Actual error is: {0}'.format(e))
-
-    if item is not None:
-        jsonresponse['JobId'] = item['JobId']
-        jobStartTimeStamp = item['JobStartTimeStamp']
-        jsonresponse['JobStartTimeStamp'] = str(jobStartTimeStamp)
-        jobCompleteTimeStamp = item['JobCompleteTimeStamp']
-        jsonresponse['JobCompleteTimeStamp'] = str(jobCompleteTimeStamp)
-        if jobCompleteTimeStamp <= jobStartTimeStamp:
-            jsonresponse['JobStatus'] = "IN PROGRESS"
-        else:
-            jsonresponse['JobStatus'] = "COMPLETED"
-        documentBucket = item['DocumentBucket']
-        jsonresponse['DocumentBucket'] = documentBucket
-        documentKey = item['DocumentKey']
-        jsonresponse['DocumentKey'] = documentKey
-        jsonresponse['DocumentName'] = item['DocumentName']
-        jsonresponse['DocumentType'] = item['DocumentType']
-        jsonresponse['UploadPrefix'] = item['UploadPrefix']
-        jsonresponse['NumPages'] = str(item['NumPages'])
-        jsonresponse['NumTables'] = str(item['NumTables'])
-        jsonresponse['NumFields'] = str(item['NumFields'])                
-    
-    if resultType == "FORM" or resultType == "ALL":
-        formFiles = item['FormFiles']
-        print("Form Fields stored in {} files".format(len(formFiles)))
-        for formFile in formFiles:
-            s3_object = s3.Object(documentBucket,formFile)
-            print("Reading Form fields from {}".format(formFile))
-            s3_response = s3_object.get()
-            jsonstring = s3_response['Body'].read()
-
-            formjson = json.loads(jsonstring)
-            jsonresponse['formfields'] = formjson    
-
-    if resultType == "TABLE" or resultType == "ALL":
-        tableFiles = item['TableFiles']
-        jsonresponse['tables'] = []     
-        print("Table data stored in {} files".format(len(tableFiles)))
-        for tableFile in tableFiles:
-            s3_object = s3.Object(documentBucket,tableFile)
-            print("Reading Form fields from {}".format(tableFile))
-            s3_response = s3_object.get()
-            xmlstring = s3_response['Body'].read()
-
-            tablexml = ElementTree.fromstring(xmlstring)
-            jsonresponse['tables'].append(etree_to_dict(tablexml))
-
     return jsonresponse
