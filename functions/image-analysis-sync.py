@@ -1,320 +1,11 @@
+from textract_util import *
 import io
 import os
 import json
 import time
 import boto3
-from io import BytesIO
-from xml.dom import minidom
 from xml.etree import ElementTree
-from collections import defaultdict
-from collections import OrderedDict 
-from xml.etree.ElementTree import Element, SubElement, Comment, tostring
 
-#Function to retrieve result of completed analysis job
-def GetDocumentAnalysisResult(textract, jobId):
-    maxResults = int(os.environ['max_results']) #1000
-    paginationToken = None
-    finished = False 
-    retryInterval = int(os.environ['retry_interval']) #30
-    maxRetryAttempt = int(os.environ['max_retry_attempt']) #5
-
-    result = []
-
-    while finished == False:
-        retryCount = 0
-
-        try:
-            if paginationToken is None:
-                response = textract.get_document_analysis(JobId=jobId,
-                                            MaxResults=maxResults)  
-            else:
-                response = textract.get_document_analysis(JobId=jobId,
-                                                MaxResults=maxResults,
-                                                NextToken=paginationToken)
-        except :
-            if retryCount < maxRetryAttempt:
-                retryCount = retryCount + 1
-                print("Result retrieval failed, retrying after {} seconds".format(retryInterval))            
-                time.sleep(retryInterval)
-            else:
-                print("Result retrieval failed, after {} retry, aborting".format(maxRetryAttempt))             
-
-        #Get the text blocks
-        blocks=response['Blocks']
-        print ('Retrieved {} Blocks from Document Text'.format(len(blocks)))
-
-        # Display block information
-        for block in blocks:
-            result.append(block)
-            if 'NextToken' in response:
-                paginationToken = response['NextToken']
-            else:
-                paginationToken = None
-                finished = True  
-    
-    return result
-
-#Function to extract table information from the raw JSON returned by Textract
-def extractTableBlocks(json):
-    blocks = {}
-    for block in json:
-        
-        blocks[block['Id']] = {}
-        blocks[block['Id']]['Type'] = block['BlockType']
-        blocks[block['Id']]['BoundingBox'] = block['Geometry']['BoundingBox']
-        blocks[block['Id']]['Polygon'] = block['Geometry']['Polygon']
-        
-        if block['BlockType'] == "PAGE": 
-            if 'Page' in block.keys():
-                blocks[block['Id']]['Page'] = block['Page']
-            else:
-                blocks[block['Id']]['Page'] = 1
-            blocks[block['Id']]['Items'] = {}
-            if 'Relationships' in block.keys():
-                for relationship in block['Relationships']:
-                    if relationship['Type'] == 'CHILD':
-                        for rid in relationship['Ids']:
-                            blocks[block['Id']]['Items'][rid] = {}  
-                            
-        if 'Text' in block.keys():
-            blocks[block['Id']]['Text'] = block['Text']
-            blocks[block['Id']]['Confidence'] = block['Confidence']
-            
-        if block['BlockType'] == "TABLE": 
-            
-            for key in blocks.keys():
-                if blocks[key]['Type'] == 'PAGE' and block['Id'] in blocks[key]['Items'].keys():
-                    blocks[block['Id']]['ContainingPage'] = blocks[key]['Page']
-                    break
-            
-            blocks[block['Id']]['Cells'] = {}
-            blocks[block['Id']]['Grid'] = []
-            blocks[block['Id']]['NumRows'] = 0
-            blocks[block['Id']]['NumColumns'] = 0
-            if 'Relationships' in block.keys():
-                for relationship in block['Relationships']:
-                    if relationship['Type'] == 'CHILD':
-                        for rid in relationship['Ids']:
-                            blocks[block['Id']]['Cells'][rid] = {}  
-                            
-        if block['BlockType'] == "CELL":
-            blocks[block['Id']]['RowIndex'] = block['RowIndex']
-            blocks[block['Id']]['ColumnIndex'] = block['ColumnIndex']
-            blocks[block['Id']]['RowSpan'] = block['RowSpan']
-            blocks[block['Id']]['ColumnSpan'] = block['ColumnSpan']
-
-            for key in blocks.keys():
-                if blocks[key]['Type'] == 'TABLE' and block['Id'] in blocks[key]['Cells'].keys():
-                    tableblock = blocks[key]
-                    grid = tableblock['Grid']
-                    childblock = tableblock['Cells'][block['Id']]
-                    childblock['Type'] = "CELL"
-                    
-                    childblock['RowIndex'] = block['RowIndex']
-                    if childblock['RowIndex'] > tableblock['NumRows']:
-                        tableblock['NumRows'] = childblock['RowIndex']
-                    while len(grid) < tableblock['NumRows']:
-                        grid.append([]) 
-                        
-                    childblock['ColumnIndex'] = block['ColumnIndex']
-                    if childblock['ColumnIndex'] > tableblock['NumColumns']:
-                        tableblock['NumColumns'] = childblock['ColumnIndex']
-                    while len(grid[tableblock['NumRows']-1]) < tableblock['NumColumns']:
-                        grid[tableblock['NumRows']-1].append(None)   
-                        
-                    childblock['RowSpan'] = block['RowSpan']
-                    childblock['ColumnSpan'] = block['ColumnSpan']
-                    childblock['Confidence'] = block['Confidence']
-                    childblock['BoundingBox'] = block['Geometry']['BoundingBox']
-                    childblock['Polygon'] = block['Geometry']['Polygon']
-                    childblock['WORD'] = []
-                    if 'Relationships' in block.keys():
-                        for relationship in block['Relationships']:                            
-                            if relationship['Type'] == 'CHILD':
-                                for rid in relationship['Ids']:
-                                    if rid in blocks.keys() and blocks[rid]['Type'] == "WORD":
-                                        word = {}
-                                        word['Text'] = blocks[rid]['Text']
-                                        word['BoundingBox'] = blocks[rid]['BoundingBox']
-                                        childblock['WORD'].append(word)
-                    gridtext = []
-                    for word in childblock['WORD']:
-                        gridtext.append(word['Text'])
-                    grid[childblock['RowIndex'] - 1][childblock['ColumnIndex'] - 1] = ' '.join(gridtext)
-                    break
-                    
-    for key in list(blocks.keys()):
-        if blocks[key]['Type'] != "TABLE":
-            blocks.pop(key, None)    
-        
-    return blocks
-    
-#Function to genrate table structure in XML, that can be rendered as HTML table
-def generateTableXML(tabledict):
-    tables = []
-    for tkey in tabledict.keys():
-        containingPage = tabledict[tkey]['ContainingPage']
-        table = Element('table')
-        table.set('Id', tkey)
-        table.set('ContainingPage', str(containingPage))
-        table.set('border', "1")
-        NumRows = tabledict[tkey]['NumRows']
-        NumColumns = tabledict[tkey]['NumColumns']
-        Grid = tabledict[tkey]['Grid']
-        for i in range(NumRows):
-            row = SubElement(table, 'tr')
-            for j in range(NumColumns):
-                col = SubElement(row, 'td')
-                col.text = Grid[i][j]
-        while len(tables) < containingPage:
-            tables.append([])
-        table.set('TableNumber', str(len(tables[containingPage - 1]) + 1))
-        tables[containingPage - 1].append(table)
-    return tables
-
-#Convert XML Tables to JSON    
-def etree_to_dict(t):
-    d = {t.tag: {} if t.attrib else None}
-    children = list(t)
-    if children:
-        dd = defaultdict(list)
-        for dc in map(etree_to_dict, children):
-            for k, v in dc.items():
-                dd[k].append(v)
-        d = {t.tag: {k: v[0] if len(v) == 1 else v
-                     for k, v in dd.items()}}
-    if t.attrib:
-        d[t.tag].update(('@' + k, v)
-                        for k, v in t.attrib.items())
-    if t.text:
-        text = t.text.strip()
-        if children or t.attrib:
-            if text:
-              d[t.tag]['#text'] = text
-        else:
-            d[t.tag] = text
-    return d
-    
-#Function to prettify XML    
-def prettify(elem):
-    rough_string = ElementTree.tostring(elem, 'utf-8')
-    reparsed = minidom.parseString(rough_string)
-    return reparsed.toprettyxml(indent="  ")    
-
-#Function to group all block elements from textract response by type
-def groupBlocksByType(responseBlocks):
-    blocks = {}
-
-    for block in responseBlocks:
-        blocktype = block['BlockType']
-        if blocktype not in blocks.keys():
-            blocks[blocktype] = [block]
-        else:
-            blocks[blocktype].append(block)
-    print("Extracted Block Types:")
-    for blocktype in blocks.keys():
-        print("                       {} = {}".format(blocktype, len(blocks[blocktype])))
-    return blocks
-
-#Function to extract all key value pair blocks from textract response
-def extractKeyValuePairs(blocks):
-
-    keyValuePairs = blocks['KEY_VALUE_SET']
-    formKeys = {}
-    formValues = {}
-    for pair in keyValuePairs:
-                                        
-        if pair['EntityTypes'][0] == 'KEY':
-            
-            if pair["Id"] not in formKeys.keys():
-                formKeys[pair["Id"]] = {
-                                            "BoundingBox": pair["Geometry"]["BoundingBox"],
-                                            "Polygon": pair["Geometry"]["Polygon"]
-                                        }
-            else:
-                formKeys[pair["Id"]]["BoundingBox"] = pair["Geometry"]["BoundingBox"]               
-                formKeys[pair["Id"]]["Polygon"] = pair["Geometry"]["Polygon"]
-                
-            for relationShip in pair['Relationships']:
-                if relationShip['Type'] == "CHILD":
-                    if pair["Id"] not in formKeys.keys():
-                        formKeys[pair["Id"]] = {"CHILD": relationShip["Ids"]}
-                    else:
-                        formKeys[pair["Id"]]["CHILD"] = relationShip["Ids"]
-                elif relationShip['Type'] == "VALUE":
-                    if pair["Id"] not in formKeys.keys():
-                        formKeys[pair["Id"]] = {"VALUE": relationShip["Ids"][0]}
-                    else:
-                        formKeys[pair["Id"]]["VALUE"] = relationShip["Ids"][0]                    
-        elif pair['EntityTypes'][0] == 'VALUE':
-            
-            if pair["Id"] not in formKeys.keys():
-                formValues[pair["Id"]] = {
-                                            "BoundingBox": pair["Geometry"]["BoundingBox"],
-                                            "Polygon": pair["Geometry"]["Polygon"]
-                                        }
-            else:
-                formValues[pair["Id"]]["BoundingBox"] = pair["Geometry"]["BoundingBox"]               
-                formValues[pair["Id"]]["Polygon"] = pair["Geometry"]["Polygon"]
-                
-            if pair["Id"] not in formValues.keys():
-                formValues[pair["Id"]] = {}
-            if "Relationships" in pair.keys():
-                for relationShip in pair['Relationships']:
-                    if relationShip['Type'] == "CHILD":
-                        if pair["Id"] not in formValues.keys():
-                            formValues[pair["Id"]] = {"CHILD": relationShip["Ids"]}
-                        else:
-                            formValues[pair["Id"]]["CHILD"] = relationShip["Ids"]                    
-
-    return formKeys, formValues
-
-#Function to extract all words from textract response
-def extractWords(blocks):
-    wordBlocks = blocks['WORD']
-    pageWords = {}
-    for wordBlock in wordBlocks:   
-        
-        if wordBlock["Id"] not in pageWords.keys():
-            pageWords[wordBlock["Id"]] = {
-                                            "Text": wordBlock["Text"], 
-                                            "BoundingBox": wordBlock["Geometry"]["BoundingBox"],
-                                            "Polygon": wordBlock["Geometry"]["Polygon"]
-                                        }
-        else:
-            pageWords[wordBlock["Id"]]["Text"] = wordBlock["Text"]        
-            pageWords[wordBlock["Id"]]["BoundingBox"] = wordBlock["Geometry"]["BoundingBox"]
-            pageWords[wordBlock["Id"]]["Polygon"] = wordBlock["Geometry"]["Polygon"]
-    return pageWords
-
-#Function to create a dictionary JSON containing the key value pairs as identified by parsing the textract response
-def generateFormEntries(formKeys, formValues, pageWords):
-    
-    formEntries = {}
-    count = 0
-    for formKey in formKeys.keys():        
-            
-        keyText = ""
-        if "CHILD" in formKeys[formKey].keys():
-            keyTextKeys = formKeys[formKey]['CHILD']
-            for textKey in keyTextKeys:
-                keyText = keyText + " " + pageWords[textKey]["Text"]
-        key = formKeys[formKey]['VALUE']
-
-        valueText = ""
-        if "CHILD" in formValues[key].keys():
-            valueTextKeys = formValues[key]["CHILD"]
-            for textKey in valueTextKeys:
-                if textKey in pageWords.keys():
-                    valueText = valueText + " " + pageWords[textKey]["Text"]
-
-        if keyText != "":
-            count = count + 1
-            if keyText not in formEntries.keys(): 
-                formEntries[keyText] = [valueText]
-            else:
-                formEntries[keyText].append(valueText)
-    return OrderedDict(sorted(formEntries.items()))
 
 def attachExternalBucketPolicy(externalBucketName):
     iam = boto3.client('iam')
@@ -423,19 +114,14 @@ def detachExternalBucketPolicy(bucketAccessPolicyArn, event):
         print("Policy - {} deleted".format(bucketAccessPolicyArn))    
 
 
-def lambda_handler(event, context):
-    
-    print(event)
+
+def lambda_handler(event, context): 
+        
     #Initialize Boto Resource	
     s3 = boto3.resource('s3')
     textract = boto3.client('textract')
-    sqs = boto3.client('sqs')
-    
-    tokenPrefix = os.environ['token_prefix']  
-
-    queueUrl = os.environ['queue_url'] 
-    roleArn = os.environ['role_arn']
-    topicArn = os.environ['topic_arn'] 
+    dynamodb = boto3.client('dynamodb')
+    table_name=os.environ['table_name']
 
     retryCount = 0
     retryInterval = int(os.environ['retry_interval']) #30
@@ -481,7 +167,7 @@ def lambda_handler(event, context):
             documentBlocks = response['Blocks']           
             print("RequestId: {}, Status: {}, Pages Processed: {}".format(jobId,
                                                                         response['ResponseMetadata']['HTTPStatusCode'],
-                                                                        response['DocumentMetadata']['Pages']))                               
+                                                                        response['DocumentMetadata']['Pages']))                                                                                                   
         except Exception as e:
             exceptionType = str(type(e))
             if exceptionType.find("AccessDeniedException") > 0:
@@ -515,7 +201,6 @@ def lambda_handler(event, context):
                     time.sleep(retryInterval*6)
         else:
             retryCount = -1   
-            
     if document_path == "":
         upload_prefix = jobId
     else:
@@ -527,12 +212,12 @@ def lambda_handler(event, context):
         print("{} Blocks retrieved".format(len(documentBlocks)))
 
         #Extract form fields into a Python dictionary by parsing the raw JSON from Textract
-        blocks = groupBlocksByType(documentBlocks)
-        formKeys, formValues = extractKeyValuePairs(blocks)
-        pageWords = extractWords(blocks)
+        blocks = textract_util.groupBlocksByType(documentBlocks)
+        formKeys, formValues = textract_util.extractKeyValuePairs(blocks)
+        pageWords = textract_util.extractWords(blocks)
 
         #Generate JSON document using form fields information  
-        formEntries = generateFormEntries(formKeys, formValues, pageWords)   
+        formEntries = textract_util.generateFormEntries(formKeys, formValues, pageWords)   
 
         json_document = "{}.json".format(document_name)
         json_file = open("/tmp/"+json_document,'w+')
@@ -541,17 +226,16 @@ def lambda_handler(event, context):
         s3.meta.client.upload_file("/tmp/"+json_document, bucket, "{}/{}".format(upload_prefix,json_document)) 
 
         #Extract table information  into a Python dictionary by parsing the raw JSON from Textract
-        tabledict = extractTableBlocks(documentBlocks)
+        tabledict = textract_util.extractTableBlocks(documentBlocks)
         
         #Generate XML document using table information    
-        tables = generateTableXML(tabledict)        
-        num_tables = len(tables)
+        num_tables, tables = textract_util.generateTableXML(tabledict)        
 
         for page in tables:
             for table in page:
                 html_document = "{}-page-{}-table-{}.html".format(document_name, table.attrib['ContainingPage'], table.attrib['TableNumber'])
                 html_file = open("/tmp/"+html_document,'w+')
-                html_file.write(prettify(table))
+                html_file.write(textract_util.prettify(table))
                 html_file.close()
                 s3.meta.client.upload_file("/tmp/"+html_document, bucket, "{}/{}".format(upload_prefix,html_document))            
            
@@ -580,7 +264,7 @@ def lambda_handler(event, context):
             xmlstring = s3_response['Body'].read()
             
             tablexml = ElementTree.fromstring(xmlstring)
-            jsonresponse['tables'].append(etree_to_dict(tablexml))
+            jsonresponse['tables'].append(textract_util.etree_to_dict(tablexml))
 
         if s3file.endswith("json"):
             file_handle = s3file[s3file.find(bucket)+len(bucket)+1:]
@@ -595,3 +279,5 @@ def lambda_handler(event, context):
         detachExternalBucketPolicy(bucketAccessPolicyArn, event)
         
     return jsonresponse
+
+ 

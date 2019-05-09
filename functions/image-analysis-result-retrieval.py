@@ -1,31 +1,11 @@
+import io
 import os
-import boto3
 import json
+import time
+import boto3
+from datetime import datetime
 from xml.etree import ElementTree
-from collections import defaultdict
-
-#Convert XML Tables to JSON    
-def etree_to_dict(t):
-    d = {t.tag: {} if t.attrib else None}
-    children = list(t)
-    if children:
-        dd = defaultdict(list)
-        for dc in map(etree_to_dict, children):
-            for k, v in dc.items():
-                dd[k].append(v)
-        d = {t.tag: {k: v[0] if len(v) == 1 else v
-                     for k, v in dd.items()}}
-    if t.attrib:
-        d[t.tag].update(('@' + k, v)
-                        for k, v in t.attrib.items())
-    if t.text:
-        text = t.text.strip()
-        if children or t.attrib:
-            if text:
-              d[t.tag]['#text'] = text
-        else:
-            d[t.tag] = text
-    return d
+from textract_util import *
 
 def lambda_handler(event, context):    
     s3 = boto3.resource('s3')
@@ -37,7 +17,7 @@ def lambda_handler(event, context):
     documentBucket = event['DocumentBucket']
     documentKey = event['DocumentKey']
     resultType = "ALL"
-    if 'ResultType' in event:
+    if 'ResultType' in event and event['ResultType'] != "":
         resultType = event['ResultType'].upper()
     print("Invoking retrieval function for result type {}".format(resultType))
     jsonresponse = {}

@@ -47,7 +47,7 @@
         },  
         "LambdaCodeFile" :{
             "Type": "String",
-            "Default": "textract-lambda.zip",
+            "Default": "textract-lambda-code.zip",
             "Description": "Zip Filename containing the lambda code and dependencies"            
         }             
     },  
@@ -233,59 +233,9 @@
                     }
                 }
             }
-        },          
-        "AmazonTextractJobStatusTopic" : {
-            "Type" : "AWS::SNS::Topic",
-            "DependsOn": "TextractDocumentAnalysisTable",
-            "Condition": "AmazonTextractJobStatusTopicNameNotEmptyCondition",
-            "Properties" : {
-                "DisplayName" : {"Fn::Join": ["-", [{"Ref": "AWS::Region"}, {"Ref": "AmazonTextractJobStatusTopicName"}]]}
-            }
-        },            
-        "TextractServiceRole": {
-            "DependsOn": "TextractDocumentAnalysisTable",
-            "Type" : "AWS::IAM::Role",
-            "Properties" : {  
-                "RoleName": {"Fn::Join": ["-", [{"Ref": "AWS::Region"}, {"Ref": "TextractRoleName"}]]},            
-                "AssumeRolePolicyDocument": {
-                    "Version": "2012-10-17",
-                    "Statement": [
-                        {
-                            "Effect": "Allow",
-                            "Principal": {
-                                "Service": [
-                                    "textract.amazonaws.com"
-                                ]
-                            },
-                            "Action": [
-                                "sts:AssumeRole"
-                            ]
-                        }                       
-                    ]
-                },
-                "Path": "/",
-                "Policies": [
-                    {
-                        "PolicyName": "AmazonTextractServiceRole",
-                        "PolicyDocument": {
-                            "Version": "2012-10-17",
-                            "Statement": [
-                                {
-                                    "Effect": "Allow",
-                                    "Action": [
-                                        "sns:Publish"
-                                    ],
-                                    "Resource": {"Ref" : "AmazonTextractJobStatusTopic"}
-                                }                              
-                            ]
-                        }
-                    }
-                ]                                
-            }
-        },             
+        },                             
         "LambdaTextractRole": {
             "Type": "AWS::IAM::Role",
-            "DependsOn": "TextractServiceRole",
             "Properties": {
                 "RoleName": {"Fn::Join": ["-", [{"Ref": "AWS::Region"}, {"Ref":"LambdaRoleName"}]]},
                 "AssumeRolePolicyDocument": {
@@ -377,7 +327,7 @@
             "DependsOn" : "LambdaTextractRole",
             "Properties": {
                 "Description" : "Python Lambda function that scans an input S3 bucket for scanned document, and invokes Textract to extract text features.",
-                "Handler": "textract-lambda.async_submit_handler",
+                "Handler": "image-analysis-textract-submit.lambda_handler",
                 "Role": { "Fn::GetAtt" : ["LambdaTextractRole", "Arn"] },               
                 "Environment": {
                     "Variables" : 
@@ -387,7 +337,7 @@
                             "retry_interval": "30",                             
                             "token_prefix": "TextractDocumentAnalyzerJob",
                             "topic_arn": {"Ref" : "AmazonTextractJobStatusTopic"},
-                            "role_arn": {"Fn::GetAtt" : ["TextractServiceRole", "Arn"] },  
+                            "role_arn": {"Fn::Join": [":",["arn","aws","iam","",{"Ref": "AWS::AccountId"}, {"Fn::Join": ["/", ["role", {"Fn::Join": ["-", [{"Ref": "AWS::Region"}, {"Ref": "TextractRoleName"}]]}]]}]]},
                             "role_name":  { "Ref": "LambdaTextractRole" },
                             "table_name": {"Ref" : "TextractDocumentAnalysisTable"}
                         }
@@ -409,7 +359,7 @@
             "DependsOn" : "LambdaTextractRole",
             "Properties": {
                 "Description" : "Python Lambda function that retrieves the document job result and extracts table structure from the result",
-                "Handler": "textract-lambda.postprocess_table_handler",
+                "Handler": "image-analysis-postprocess-table.lambda_handler",
                 "Role": { "Fn::GetAtt" : ["LambdaTextractRole", "Arn"] },
                 "Environment": {
                     "Variables" : 
@@ -438,7 +388,7 @@
             "DependsOn" : "LambdaTextractRole",
             "Properties": {
                 "Description" : "Python Lambda function that retrieves the document job result and extracts form fields from the result",
-                "Handler": "textract-lambda.postprocess_form_handler",
+                "Handler": "image-analysis-postprocess-form.lambda_handler",
                 "Role": { "Fn::GetAtt" : ["LambdaTextractRole", "Arn"] },
                 "Environment": {
                     "Variables" : 
@@ -467,7 +417,7 @@
             "DependsOn" : "LambdaTextractRole",
             "Properties": {
                 "Description" : "Python Lambda function that retrieves the textract results in form of html tables and json dicitionary by reading files from s3 output location",
-                "Handler": "textract-lambda.result_retrieval_handler",
+                "Handler": "image-analysis-result-retrieval.lambda_handler",
                 "Role": { "Fn::GetAtt" : ["LambdaTextractRole", "Arn"] },
                 "Environment": {
                     "Variables" : 
@@ -495,50 +445,88 @@
                 "FunctionName": {"Ref": "TextractAsyncJobSubmitFunction"},
                 "Action": "lambda:InvokeFunction",
                 "Principal": "s3.amazonaws.com",
-                "SourceAccount": {"Ref": "AWS::AccountId"},
                 "SourceArn": {"Fn::Join": [":",["arn","aws","s3","","", {"Fn::Join": ["-", [{"Ref": "AWS::AccountId"}, {"Ref": "DocumentBucketName"}]]}]]}
             }
-        },
+        },        
+        "AmazonTextractJobStatusTopic" : {
+            "Type" : "AWS::SNS::Topic",
+            "DependsOn": ["TextractPostProcessTableFunction", "TextractPostProcessFormFunction"],
+            "Condition": "AmazonTextractJobStatusTopicNameNotEmptyCondition",
+            "Properties" : {
+                "DisplayName" : {"Fn::Join": ["-", [{"Ref": "AWS::Region"}, {"Ref": "AmazonTextractJobStatusTopicName"}]]},
+                "Subscription": [
+                    {
+                        "Endpoint" : {"Fn::GetAtt" : ["TextractPostProcessTableFunction", "Arn"] },
+                        "Protocol": "lambda"
+                    },
+                    {
+                        "Endpoint" : {"Fn::GetAtt" : ["TextractPostProcessFormFunction", "Arn"] },
+                        "Protocol": "lambda"
+                    }                
+                ]                  
+            }          
+        },    
         "PostProcessTableInvokeSNSPermission": {
             "Type": "AWS::Lambda::Permission",
-            "DependsOn": "TextractPostProcessTableFunction",
+            "DependsOn": "AmazonTextractJobStatusTopic",
             "Properties": {
                 "FunctionName": {"Ref": "TextractPostProcessTableFunction"},
                 "Action": "lambda:InvokeFunction",
                 "Principal": "sns.amazonaws.com",
-                "SourceAccount": {"Ref": "AWS::AccountId"},
                 "SourceArn": {"Ref": "AmazonTextractJobStatusTopic"}
             }
         },        
-        "TopicTableLambdaSubscription": {
-            "DependsOn": "TextractPostProcessTableFunction",
-            "Type" : "AWS::SNS::Subscription",
-            "Properties" : {
-                "TopicArn" : {"Ref" : "AmazonTextractJobStatusTopic"},
-                "Protocol" : "lambda",                
-                "Endpoint" : {"Fn::GetAtt" : ["TextractPostProcessTableFunction", "Arn"] }
-              }            
-        },
         "PostProcessFormInvokeSNSPermission": {
             "Type": "AWS::Lambda::Permission",
-            "DependsOn": "TextractPostProcessFormFunction",
+            "DependsOn": "AmazonTextractJobStatusTopic",
             "Properties": {
                 "FunctionName": {"Ref": "TextractPostProcessFormFunction"},
                 "Action": "lambda:InvokeFunction",
                 "Principal": "sns.amazonaws.com",
-                "SourceAccount": {"Ref": "AWS::AccountId"},
                 "SourceArn": {"Ref": "AmazonTextractJobStatusTopic"}
             }
-        },          
-        "TopicFormLambdaSubscription": {
-            "DependsOn": "TextractPostProcessFormFunction",
-            "Type" : "AWS::SNS::Subscription",
-            "Properties" : {
-                "TopicArn" : {"Ref" : "AmazonTextractJobStatusTopic"},
-                "Protocol" : "lambda",                
-                "Endpoint" : {"Fn::GetAtt" : ["TextractPostProcessFormFunction", "Arn"] }
-              }            
-        },          
+        },     
+        "TextractServiceRole": {
+            "Type" : "AWS::IAM::Role",
+            "DependsOn": "AmazonTextractJobStatusTopic",            
+            "Properties" : {  
+                "RoleName": {"Fn::Join": ["-", [{"Ref": "AWS::Region"}, {"Ref": "TextractRoleName"}]]},            
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "textract.amazonaws.com"
+                                ]
+                            },
+                            "Action": [
+                                "sts:AssumeRole"
+                            ]
+                        }                       
+                    ]
+                },
+                "Path": "/",
+                "Policies": [
+                    {
+                        "PolicyName": "AmazonTextractServiceRole",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "sns:Publish"
+                                    ],
+                                    "Resource": {"Ref" : "AmazonTextractJobStatusTopic"}
+                                }                              
+                            ]
+                        }
+                    }
+                ]                                
+            }
+        },                            
         "DocumentBucket": {
             "Type": "AWS::S3::Bucket",
             "DependsOn": ["LambdaInvokeS3Permission", "TextractAsyncJobSubmitFunction"],
@@ -613,7 +601,7 @@
         },
         "TextractDemoAPI": {
             "Type": "AWS::ApiGateway::RestApi",
-            "DependsOn": "TextractAsyncJobSubmitFunction",
+            "DependsOn": ["TextractAsyncJobSubmitFunction", "TextractResultRetrievalFunction"],
             "Properties": {
                 "Name": "Textract Demo API",
                 "Description" : "API to invoke Textract with documents on specified S3 bucket, and extract text features",
@@ -867,9 +855,7 @@
                 "Action": "lambda:invokeFunction",
                 "FunctionName": {"Fn::GetAtt": ["TextractResultRetrievalFunction", "Arn"]},
                 "Principal": "apigateway.amazonaws.com",
-                "SourceArn": {"Fn::Join": ["",
-        ["arn:aws:execute-api:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"}, ":", {"Ref": "TextractDemoAPI"}, "/*"]
-                ]}
+                "SourceArn": {"Fn::Join": ["",["arn:aws:execute-api:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"}, ":", {"Ref": "TextractDemoAPI"}, "/*"]]}
             }
         },        
         "TextractDemoAPIDeployment": {

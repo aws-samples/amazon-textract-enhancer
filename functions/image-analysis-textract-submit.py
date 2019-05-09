@@ -3,49 +3,6 @@ import time
 import boto3
 from datetime import datetime
 
-#Function to retrieve result of completed analysis job
-def GetDocumentAnalysisResult(textract, jobId):
-    maxResults = int(os.environ['max_results']) #1000
-    paginationToken = None
-    finished = False 
-    retryInterval = int(os.environ['retry_interval']) #30
-    maxRetryAttempt = int(os.environ['max_retry_attempt']) #5
-
-    result = []
-
-    while finished == False:
-        retryCount = 0
-
-        try:
-            if paginationToken is None:
-                response = textract.get_document_analysis(JobId=jobId,
-                                            MaxResults=maxResults)  
-            else:
-                response = textract.get_document_analysis(JobId=jobId,
-                                                MaxResults=maxResults,
-                                                NextToken=paginationToken)
-        except :
-            if retryCount < maxRetryAttempt:
-                retryCount = retryCount + 1
-                print("Result retrieval failed, retrying after {} seconds".format(retryInterval))            
-                time.sleep(retryInterval)
-            else:
-                print("Result retrieval failed, after {} retry, aborting".format(maxRetryAttempt))             
-
-        #Get the text blocks
-        blocks=response['Blocks']
-        print ('Retrieved {} Blocks from Document Text'.format(len(blocks)))
-
-        # Display block information
-        for block in blocks:
-            result.append(block)
-            if 'NextToken' in response:
-                paginationToken = response['NextToken']
-            else:
-                paginationToken = None
-                finished = True  
-    
-    return result
 
 def attachExternalBucketPolicy(externalBucketName):
     iam = boto3.client('iam')
@@ -153,8 +110,9 @@ def detachExternalBucketPolicy(bucketAccessPolicyArn, event):
         )
         print("Policy - {} deleted".format(bucketAccessPolicyArn))    
 
-def lambda_handler(event, context):
-    
+
+
+def lambda_handler(event, context): 
     print(event)
     
     #Initialize Boto Resource	
@@ -205,7 +163,7 @@ def lambda_handler(event, context):
     while retryCount >= 0 and retryCount < maxRetryAttempt:
         try:
             response = textract.start_document_analysis(
-                                    #ClientRequestToken = "{}-{}".format(tokenPrefix, document[document.rfind("/")+1:document.rfind(".")]),
+                                    ClientRequestToken = "{}-{}".format(tokenPrefix, document.replace("/","_").replace(".","-")),
                                     DocumentLocation={'S3Object': {'Bucket': bucket, 'Name': document}},
                                     FeatureTypes=["TABLES", "FORMS"],
                                     NotificationChannel={'SNSTopicArn': topicArn,'RoleArn': roleArn},
@@ -246,9 +204,9 @@ def lambda_handler(event, context):
         'JobCompleteTimeStamp': '0',
         'NumPages': '0',
         'NumTables': '0',
-        'NumFields': '0',
+        'NumFields': '0',        
         'TableFiles': [],
-        'FormFiles': []
+        'FormFiles': []        
     }
     
     recordExists = False
@@ -262,20 +220,21 @@ def lambda_handler(event, context):
         )      
         if response['Count'] > 0:
             recordExists = True
-            print(jsonresponse)
-            jsonresponse['JobStartTimeStamp'] = int(response['Items'][0]['JobStartTimeStamp']['N'])
-            jsonresponse['JobCompleteTimeStamp'] = int(response['Items'][0]['JobCompleteTimeStamp']['N'])
-            jsonresponse['NumPages'] = int(response['Items'][0]['NumPages']['N'])
-            jsonresponse['NumTables'] = int(response['Items'][0]['NumTables']['N'])
-            jsonresponse['NumFields'] = int(response['Items'][0]['NumFields']['N'])
-            tableFiles = []
-            for tableFile in response['Items'][0]['TableFiles']['L']:
+            item = response['Items'][-1]
+            jsonresponse['JobStartTimeStamp'] = int(item['JobStartTimeStamp']['N'])
+            jsonresponse['JobCompleteTimeStamp'] = int(item['JobCompleteTimeStamp']['N'])
+            jsonresponse['NumPages'] = int(item['NumPages']['N'])
+            jsonresponse['NumTables'] = int(item['NumTables']['N'])
+            jsonresponse['NumFields'] = int(item['NumFields']['N'])            
+            tableFiles = []            
+            for tableFile in item['TableFiles']['L']:
                 tableFiles.append(tableFile['S'])
             jsonresponse['TableFiles'] = tableFiles
             formFiles = []
-            for formFile in response['Items'][0]['FormFiles']['L']:
+            for formFile in item['FormFiles']['L']:
                 formFiles.append(formFile['S'])            
-            jsonresponse['FormFiles'] = formFiles           
+            jsonresponse['FormFiles'] = formFiles                 
+            
     except Exception as e:
         print('DynamoDB Read Error is: {0}'.format(e))  
     
@@ -284,16 +243,16 @@ def lambda_handler(event, context):
             response = dynamodb.update_item(
                 TableName=table_name,
                 Key={
-                    'JobId':{'S':jobId},
+                    'JobId':{'S':jobId}
                 },
                 AttributeUpdates={
                     'DocumentBucket':{'Value': {'S':bucket}},
                     'DocumentKey':{'Value': {'S':document}},
                     'UploadPrefix':{'Value': {'S':upload_prefix}},
                     'DocumentName':{'Value': {'S':document_name}},
-                    'DocumentType':{'Value': {'S':document_type}},
+                    'DocumentType':{'Value': {'S':document_type}},                        
                     'JobStartTimeStamp':{'Value': {'N':str(jobStartTimeStamp)}},
-                    'JobCompleteTimeStamp':{'Value': {'N':'0'}},   
+                    'JobCompleteTimeStamp':{'Value': {'N':'0'}},
                     'NumPages':{'Value': {'N':'0'}},
                     'NumTables':{'Value': {'N':'0'}},
                     'NumFields':{'Value': {'N':'0'}},                        
