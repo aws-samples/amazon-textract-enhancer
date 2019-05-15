@@ -34,13 +34,21 @@ In order to complete this workshop you'll need an AWS Account with access to cre
     
 ## 1. Launch stack
 
-Textract Enhancer solution components can each be built by hand, either using [AWS Console](https://console.aws.amazon.com/) or using AWS CLI. AWS Cloudformation on the other hand provides mechanism to script the hard work of launching the whole stack. 
+Textract Enhancer solution components can each be built by hand, either using [AWS Console](https://console.aws.amazon.com/) or using AWS CLI. [AWS Cloudformation](https://aws.amazon.com/cloudformation/) on the other hand provides mechanism to script the hard work of launching the whole stack. 
+
 You can use the button below to launch the solution stack, the component details of which you can find in the following section.
 
 Region| Launch
 ------|-----
 US East (N. Virginia) | [![Launch Textract Enhancer in us-east-1](http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/images/cloudformation-launch-stack-button.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=textract-enhancer&templateURL=https://s3.amazonaws.com/my-python-packages/textract-api-stack.json)
 
+
+## 2. Architecture
+The solution architecture is based solely upon serverless Lambda functions, invoking Textract API endpoints. The architecture uses Textract in asynchronous mode, and uses a DynamoDB table to keep track of job status and response location.
+    ![Job submission architecture](images/job-submission-architecture.png)
+
+The solution also uses Rest API backed by anotyher set of Lambda functions and the DynamoDB table to provide for fast querying of the resulting documents from S3 bucket.
+    ![Result retrieval architecture](images/result-retrieval-architecture.png)
 
 
 ## 2. Solution components
