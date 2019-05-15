@@ -47,7 +47,7 @@ US East (N. Virginia) | [![Launch Textract Enhancer in us-east-1](http://docs.aw
 The solution architecture is based solely upon serverless Lambda functions, invoking Textract API endpoints. The architecture uses Textract in asynchronous mode, and uses a DynamoDB table to keep track of job status and response location.
     ![Job submission architecture](images/job-submission-architecture.png)
 
-The solution also uses Rest API backed by anotyher set of Lambda functions and the DynamoDB table to provide for fast querying of the resulting documents from S3 bucket.
+The solution also uses Rest API backed by another set of Lambda functions and the DynamoDB table to provide for fast querying of the resulting documents from S3 bucket.
     ![Result retrieval architecture](images/result-retrieval-architecture.png)
 
 
@@ -235,17 +235,22 @@ The solution also uses Rest API backed by anotyher set of Lambda functions and t
 ```            
 </p></details>
 
-### 3.3. DyanmoDB Table
 
-### 3.4. SNS Topic
+### 3.3. SNS Topic
+- When submitting asynchronous jobs to Textract, an SNS topic needs to be specified, which textract uses to post the job completion messages. The messages posted to this topic would contain the same unique job-id that was generated and returned during submission API call. Subsequent retrieval calls will then use this job-id to obtain the results for the corresponding Textract jobs.
+- Since `DocumentAnalaysis` and `TextDetection` are separate job types, that requires post processing by different Lambda functions, two different SNS topics are used, on order to have a clear separation of channels.
+- The topic named `DocumentAnalysisJobStatusTopic` adds lambda protocol subscriptions for `TextractPostProcessTableFunction` and `TextractPostProcessFormFunction`. 
+- The topic named `TextDetectionJobStatusTopic` adds lambda protocol subscription for `TextractPostProcessTextFunction`. 
 
-### 3.5. Textract service role
+### 3.4. Textract service role
 
-### 3.6. Job submission - Lambda function
+### 3.5. Job submission - Lambda function
 
-### 3.7. Post Processing - Lambda functions
+### 3.6. Post Processing - Lambda functions
 
 ### 3.8. S3 Bucket
+
+### 3.6. Result Retrieval - Lambda functions
 
 ### 3.9. Rest API
 
