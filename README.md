@@ -243,7 +243,7 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 - The topic named `TextDetectionJobStatusTopic` adds lambda protocol subscription for `TextractPostProcessTextFunction`. 
 
 ### 3.4. Textract service role
--In order to be able to publish job completion messages to specified SNS topic, Textract also needs to assume a role that has policies attahced, allowing publlish access to the respective topics. This service role needs to be created and the ARN passed to textract with the asynchronous job submission.
+- In order to be able to publish job completion messages to specified SNS topic, Textract also needs to assume a role that has policies attahced, allowing publlish access to the respective topics. This service role needs to be created and the ARN passed to textract with the asynchronous job submission.
 <details>
 <summary>Following snippet shows the assume role policy document for the Textract service role (expand for details)</summary><p>
 
@@ -269,7 +269,7 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 
 - Since we use two different SNS topics, the policies attached to this role needs to allow publish access to both of these topics.
 <details>
-<summary>Following snippet shows the policy document with policies allowing access to both topics(expand for details)</summary><p>
+<summary>Following snippet shows the policy document with policies allowing access to both topics (expand for details)</summary><p>
 
 ``` 
 "PolicyDocument": {
@@ -295,6 +295,19 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 </p></details>
 
 ### 3.5. Job submission - Lambda function
+- A Lambda function, named `TextractAsyncJobSubmitFunction` is used to invoke both `DocumentAnalysis` and `TextDetection` API calls to Textract. Several environment variables are passed to this function:
+    - `document_analysis_token_prefix`: an unique string used to identify the document analysis jobs. This is used alongwith the bucket and document name to indicate to Textract the uniqueness of submissions. Based on this, Textract wither runs a fresh job or responds with a jpob-id generated during a prior submission of same document. 
+    - `text_detection_token_prefix`: an unique string used to identify the text detection jobs. This is used alongwith the bucket and document name to indicate to Textract the uniqueness of submissions. Based on this, Textract wither runs a fresh job or responds with a jpob-id generated during a prior submission of same document.
+    - `document_analysis_topic_arn`: Specifies the SNS topic to which job completion messages for document analysis jobs will be posted. 
+    - `text_detection_topic_arn`: Specifies the SNS topic to which job completion messages for text detection jobs will be posted.
+    - `role_name`: Textract service role to which policies allowing message publication to the two previously mentioned topics are added.
+    - `retry_interval`: Value in seconds specifying how long the function should wait if a submission fails. When lot of submission requests arrive within a short time, either through exposed Rest API, or due to bulk upload of documents to S3 bucket, Textract API throughput exceeds. By waiting for a certain interval before retrying another attempted submission ensures that all documents gets their turn to be processed.
+    - `max_retry_attempt`: Sometimes, due to large volume of requests, some might keep failing consistently. By specifying a maximum number of attempts, the solution allows us to gracefully exit out of the processing pipeleine. This feature, alongwith tracking metadata in DynamoDB table can then be used to manually submit the request later, using the Rest API interface.
+- The job submission function executes the following actions, when invoked:
+    - Attach S3 access policy to the execution role it is using for itself (allowing invocation using documents either using own S3 buckets, or hosted on an external S3 bucket)
+    - Submit document analysis job using `start_document_analysis` method
+    - Submit text detection job using `start_document_text_detection` method
+    - Create or update DynamoDB records for both job types
 
 ### 3.6. Post Processing - Lambda functions
 
