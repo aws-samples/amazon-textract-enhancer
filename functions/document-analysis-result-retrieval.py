@@ -38,8 +38,10 @@ def lambda_handler(event, context):
                 ":jobType": 'DocumentAnalysis'
             }
         )
-        print(len(response['Items']))
-        item = response['Items'][-1]
+        recordsMatched = len(response['Items'])
+        print("{} matching records found for {}/{}".format(recordsMatched, documentBucket, documentKey))
+        if recordsMatched > 0:
+            item = response['Items'][-1]
     except Exception as e:
         print('Actual error is: {0}'.format(e))
 
@@ -64,29 +66,29 @@ def lambda_handler(event, context):
         jsonresponse['NumTables'] = str(item['NumTables'])
         jsonresponse['NumFields'] = str(item['NumFields'])                
     
-    if resultType == "FORM" or resultType == "ALL":
-        formFiles = item['FormFiles']
-        print("Form Fields stored in {} files".format(len(formFiles)))
-        for formFile in formFiles:
-            s3_object = s3.Object(documentBucket,formFile)
-            print("Reading Form fields from {}".format(formFile))
-            s3_response = s3_object.get()
-            jsonstring = s3_response['Body'].read()
+        if resultType == "FORM" or resultType == "ALL":
+            formFiles = item['FormFiles']
+            print("Form Fields stored in {} files".format(len(formFiles)))
+            for formFile in formFiles:
+                s3_object = s3.Object(documentBucket,formFile)
+                print("Reading Form fields from {}".format(formFile))
+                s3_response = s3_object.get()
+                jsonstring = s3_response['Body'].read()
 
-            formjson = json.loads(jsonstring)
-            jsonresponse['formfields'] = formjson    
+                formjson = json.loads(jsonstring)
+                jsonresponse['formfields'] = formjson    
 
-    if resultType == "TABLE" or resultType == "ALL":
-        tableFiles = item['TableFiles']
-        jsonresponse['tables'] = []     
-        print("Table data stored in {} files".format(len(tableFiles)))
-        for tableFile in tableFiles:
-            s3_object = s3.Object(documentBucket,tableFile)
-            print("Reading Form fields from {}".format(tableFile))
-            s3_response = s3_object.get()
-            xmlstring = s3_response['Body'].read()
+        if resultType == "TABLE" or resultType == "ALL":
+            tableFiles = item['TableFiles']
+            jsonresponse['tables'] = []     
+            print("Table data stored in {} files".format(len(tableFiles)))
+            for tableFile in tableFiles:
+                s3_object = s3.Object(documentBucket,tableFile)
+                print("Reading Form fields from {}".format(tableFile))
+                s3_response = s3_object.get()
+                xmlstring = s3_response['Body'].read()
 
-            tablexml = ElementTree.fromstring(xmlstring)
-            jsonresponse['tables'].append(etree_to_dict(tablexml))
+                tablexml = ElementTree.fromstring(xmlstring)
+                jsonresponse['tables'].append(etree_to_dict(tablexml))
 
     return jsonresponse

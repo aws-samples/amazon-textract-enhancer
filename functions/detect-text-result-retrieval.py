@@ -35,8 +35,10 @@ def lambda_handler(event, context):
 
             }
         )
-        print(len(response['Items']))
-        item = response['Items'][-1]
+        recordsMatched = len(response['Items'])
+        print("{} matching records found for {}/{}".format(recordsMatched, documentBucket, documentKey))
+        if recordsMatched > 0:
+            item = response['Items'][-1]
     except Exception as e:
         print('Actual error is: {0}'.format(e))
 
@@ -60,21 +62,21 @@ def lambda_handler(event, context):
         jsonresponse['NumPages'] = str(item['NumPages'])
         jsonresponse['NumLines'] = str(item['NumLines'])            
     
-    textFiles = item['TextFiles']
-    print("Document Text stored in {} files".format(len(textFiles)))
-    for textFile in textFiles:
-        s3_object = s3.Object(documentBucket,textFile)
-        print("Reading Document text from {}".format(textFile))
-        s3_response = s3_object.get()
-        jsonstring = s3_response['Body'].read()
+        textFiles = item['TextFiles']
+        print("Document Text stored in {} files".format(len(textFiles)))
+        for textFile in textFiles:
+            s3_object = s3.Object(documentBucket,textFile)
+            print("Reading Document text from {}".format(textFile))
+            s3_response = s3_object.get()
+            jsonstring = s3_response['Body'].read()
 
-        documentjson = json.loads(jsonstring)
+            documentjson = json.loads(jsonstring)
 
-        jsonresponse = {}
-        for page in documentjson.keys():
-            jsonresponse[page] = []
-            for line in documentjson[page].keys():
-                jsonresponse[page].append(documentjson[page][line]['Text'])
+            jsonresponse = {}
+            for page in documentjson.keys():
+                jsonresponse[page] = []
+                for line in documentjson[page].keys():
+                    jsonresponse[page].append(documentjson[page][line]['Text'])
 
 
     return jsonresponse
