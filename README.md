@@ -111,10 +111,10 @@ The solution also uses Rest API backed by anotyher set of Lambda functions and t
                     "WriteCapacityUnits": 5
             }
         }
-    ],
+    ],   
     ```            
 </p></details>
-        
+
 ### 3.2. Lambda execution role
 
 ### 3.3. DyanmoDB Table
