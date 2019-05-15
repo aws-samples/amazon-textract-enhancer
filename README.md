@@ -61,58 +61,58 @@ The solution also uses Rest API backed by anotyher set of Lambda functions and t
 <details>
 <summary><strong>Following snippet shows the schema definition used in defining the table (expand for details)</strong></summary><p>
 
-    ```
-    "AttributeDefinitions": [
-        {
-            "AttributeName": "JobId",
-            "AttributeType": "S"
-        },       
-        {
-            "AttributeName": "JobType",
-            "AttributeType": "S"
-        },                                
-        {
-            "AttributeName": "DocumentBucket",
-            "AttributeType": "S"
+```
+"AttributeDefinitions": [
+    {
+        "AttributeName": "JobId",
+        "AttributeType": "S"
+    },       
+    {
+        "AttributeName": "JobType",
+        "AttributeType": "S"
+    },                                
+    {
+        "AttributeName": "DocumentBucket",
+        "AttributeType": "S"
+    },
+    {
+        "AttributeName": "DocumentPath",
+        "AttributeType": "S"
+    }                    
+],
+"KeySchema": [
+    {
+        "AttributeName": "JobId",
+        "KeyType": "HASH"
+    },
+    {
+        "AttributeName": "JobType",
+        "KeyType": "RANGE"
+    }                    
+],
+"GlobalSecondaryIndexes": [
+    {
+        "IndexName": "DocumentIndex",
+        "KeySchema": [
+                {
+                    "AttributeName": "DocumentBucket",
+                    "KeyType": "HASH"
+                },
+                {
+                    "AttributeName": "DocumentPath",
+                    "KeyType": "RANGE"
+                }
+        ],
+        "Projection": {
+            "ProjectionType": "KEYS_ONLY"
         },
-        {
-            "AttributeName": "DocumentPath",
-            "AttributeType": "S"
-        }                    
-    ],
-    "KeySchema": [
-        {
-            "AttributeName": "JobId",
-            "KeyType": "HASH"
-        },
-        {
-            "AttributeName": "JobType",
-            "KeyType": "RANGE"
-        }                    
-    ],
-    "GlobalSecondaryIndexes": [
-        {
-            "IndexName": "DocumentIndex",
-            "KeySchema": [
-                    {
-                        "AttributeName": "DocumentBucket",
-                        "KeyType": "HASH"
-                    },
-                    {
-                        "AttributeName": "DocumentPath",
-                        "KeyType": "RANGE"
-                    }
-            ],
-            "Projection": {
-                "ProjectionType": "KEYS_ONLY"
-            },
-            "ProvisionedThroughput": {
-                    "ReadCapacityUnits": 5,
-                    "WriteCapacityUnits": 5
-            }
+        "ProvisionedThroughput": {
+                "ReadCapacityUnits": 5,
+                "WriteCapacityUnits": 5
         }
-    ],   
-    ```            
+    }
+],   
+```            
 </p></details>
 
 ### 3.2. Lambda execution role
