@@ -51,25 +51,85 @@ The solution also uses Rest API backed by anotyher set of Lambda functions and t
     ![Result retrieval architecture](images/result-retrieval-architecture.png)
 
 
-## 2. Solution components
+## 3. Solution components
 
-### 2.1. DyanmoDB Table
+### 3.1. DyanmoDB Table
+- When a Textract job is submitted in asynchronous mode, using a request token, it creates a unique job-id is created. For any subsequent submissions with same document, it prevents Textract from running the same job over again. Since in this solution, two different types of jobs are submitted, one for `DocumentAnalysis` and one for `TextDetection`, a DynamoDB table is used with `JobId` as HASH key and `JobType` as RANGE key, to track the status of the job.
+- In order to facilitate table scan with the document location, the table also use a global secondary index, with `DocumentBucket` as HASH key and `DocumentPath` as RANGE key. This information is used by the retrieval functions later when an API request is sent to obtain the tables, forms and lines of texts.
+- Upon completion of a job, post processing Lambda functions update the corresponding records in this DynamoDB table with location of the extracted files, as stored in S3 bucket, and other metadata such as completion time, number of pages, lines, tables and form fields.
 
-### 2.2. Lambda execution role
+<details>
+<summary><strong>Following snippet shows the schema definition used in defining the table (expand for details)</strong></summary><p>
 
-### 2.3. DyanmoDB Table
+    ```
+    "AttributeDefinitions": [
+        {
+            "AttributeName": "JobId",
+            "AttributeType": "S"
+        },       
+        {
+            "AttributeName": "JobType",
+            "AttributeType": "S"
+        },                                
+        {
+            "AttributeName": "DocumentBucket",
+            "AttributeType": "S"
+        },
+        {
+            "AttributeName": "DocumentPath",
+            "AttributeType": "S"
+        }                    
+    ],
+    "KeySchema": [
+        {
+            "AttributeName": "JobId",
+            "KeyType": "HASH"
+        },
+        {
+            "AttributeName": "JobType",
+            "KeyType": "RANGE"
+        }                    
+    ],
+    "GlobalSecondaryIndexes": [
+        {
+            "IndexName": "DocumentIndex",
+            "KeySchema": [
+                    {
+                        "AttributeName": "DocumentBucket",
+                        "KeyType": "HASH"
+                    },
+                    {
+                        "AttributeName": "DocumentPath",
+                        "KeyType": "RANGE"
+                    }
+            ],
+            "Projection": {
+                "ProjectionType": "KEYS_ONLY"
+            },
+            "ProvisionedThroughput": {
+                    "ReadCapacityUnits": 5,
+                    "WriteCapacityUnits": 5
+            }
+        }
+    ],
+    ```            
+</p></details>
+        
+### 3.2. Lambda execution role
 
-### 2.4. SNS Topic
+### 3.3. DyanmoDB Table
 
-### 2.5. Textract service role
+### 3.4. SNS Topic
 
-### 2.6. Job submission - Lambda function
+### 3.5. Textract service role
 
-### 2.7. Post Processing - Lambda functions
+### 3.6. Job submission - Lambda function
 
-### 2.8. S3 Bucket
+### 3.7. Post Processing - Lambda functions
 
-### 2.9. Rest API
+### 3.8. S3 Bucket
+
+### 3.9. Rest API
 
 
 
