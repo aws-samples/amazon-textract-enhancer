@@ -88,7 +88,8 @@ def lambda_handler(event, context):
                     response = dynamodb.update_item(
                         TableName=table_name,
                         Key={
-                            'JobId':{'S':textractJobId}
+                            'JobId':{'S':textractJobId},
+                            'JobType':{'S':'DocumentAnalysis'}
                         },
                         ExpressionAttributeNames={"#ff": "FormFiles", "#jct": "JobCompleteTimeStamp", "#nf": "NumFields", "#np": "NumPages"},
                         UpdateExpression='SET #ff = list_append(#ff, :form_files), #jct = :job_complete, #nf = :num_fields, #np = :num_pages',

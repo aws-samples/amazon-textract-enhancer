@@ -26,11 +26,16 @@
             "Default": "LambdaTextractRole",
             "ConstraintDescription" : "Should be a Valid IAM Role Name"
         },              
-        "AmazonTextractJobStatusTopicName" :{
+        "DocumentAnalysisJobStatusTopicName" :{
             "Type": "String",
-            "Default": "AmazonTextractJobStatusTopic",
-            "Description": "SNS Topic where Textract will publish JobIds upon completion"            
-        },       
+            "Default": "DocumentAnalysisJobStatusTopic",
+            "Description": "SNS Topic where Textract will publish JobIds upon completion of document analysis jobs"            
+        }, 
+        "TextDetectionJobStatusTopicName" :{
+            "Type": "String",
+            "Default": "TextDetectionJobStatusTopic",
+            "Description": "SNS Topic where Textract will publish JobIds upon completion of text detection jobs"            
+        },              
         "DynamoDBTableName" :{
             "Type": "String",
             "Description": "DynamoDB Table name where job status and results will be stored",
@@ -55,7 +60,8 @@
         "DocumentBucketNameNotEmptyCondition" : { "Fn::Not" : [ { "Fn::Equals" : ["", {"Ref": "DocumentBucketName"}] } ] },
         "NewDocumentBucketNeededCondition" : { "Fn::Equals" : ["true", {"Ref": "NewDocumentBucketNeeded"}] },
         "NewDocumentBucketCreation" : { "Fn::And" : [ {"Condition" : "DocumentBucketNameNotEmptyCondition"}, {"Condition" : "NewDocumentBucketNeededCondition"} ] },
-        "AmazonTextractJobStatusTopicNameNotEmptyCondition" : { "Fn::Not" : [ { "Fn::Equals" : ["", {"Ref": "AmazonTextractJobStatusTopicName"}] } ] }
+        "DocumentAnalysisJobStatusTopicNameNotEmptyCondition" : { "Fn::Not" : [ { "Fn::Equals" : ["", {"Ref": "DocumentAnalysisJobStatusTopicName"}] } ] },
+        "TextDetectionJobStatusTopicNameNotEmptyCondition" : { "Fn::Not" : [ { "Fn::Equals" : ["", {"Ref": "TextDetectionJobStatusTopicName"}] } ] }
     },
     "Resources": {     
         "TextractDocumentAnalysisTable": {
@@ -66,7 +72,11 @@
                     {
                         "AttributeName": "JobId",
                         "AttributeType": "S"
-                    },                 
+                    },       
+                    {
+                        "AttributeName": "JobType",
+                        "AttributeType": "S"
+                    },                                
                     {
                         "AttributeName": "DocumentBucket",
                         "AttributeType": "S"
@@ -80,7 +90,11 @@
                     {
                         "AttributeName": "JobId",
                         "KeyType": "HASH"
-                    }
+                    },
+                    {
+                        "AttributeName": "JobType",
+                        "KeyType": "RANGE"
+                    }                    
                 ],
                 "GlobalSecondaryIndexes": [
                     {
@@ -321,45 +335,13 @@
                     }                                                              
                 ]
             }
-        },
-        "TextractAsyncJobSubmitFunction": {
-            "Type": "AWS::Lambda::Function",
-            "DependsOn" : "LambdaTextractRole",
-            "Properties": {
-                "Description" : "Python Lambda function that scans an input S3 bucket for scanned document, and invokes Textract to extract text features.",
-                "Handler": "image-analysis-textract-submit.lambda_handler",
-                "Role": { "Fn::GetAtt" : ["LambdaTextractRole", "Arn"] },               
-                "Environment": {
-                    "Variables" : 
-                        { 
-                            "AWS_DATA_PATH": "models",
-                            "max_retry_attempt": "3",   
-                            "retry_interval": "30",                             
-                            "token_prefix": "TextractDocumentAnalyzerJob",
-                            "topic_arn": {"Ref" : "AmazonTextractJobStatusTopic"},
-                            "role_arn": {"Fn::Join": [":",["arn","aws","iam","",{"Ref": "AWS::AccountId"}, {"Fn::Join": ["/", ["role", {"Fn::Join": ["-", [{"Ref": "AWS::Region"}, {"Ref": "TextractRoleName"}]]}]]}]]},
-                            "role_name":  { "Ref": "LambdaTextractRole" },
-                            "table_name": {"Ref" : "TextractDocumentAnalysisTable"}
-                        }
-                },                 
-                "Code": {
-                    "S3Bucket": { "Ref" : "LambdaCodeBucketName" },
-                    "S3Key": { "Ref" : "LambdaCodeFile" }
-                },
-                "Runtime": "python3.6",
-                "Timeout": "900",
-                "MemorySize": "1024",
-                "TracingConfig": {
-                    "Mode": "Active"
-                }
-            }
-        },
+        },   
         "TextractPostProcessTableFunction": {
             "Type": "AWS::Lambda::Function",
             "DependsOn" : "LambdaTextractRole",
             "Properties": {
                 "Description" : "Python Lambda function that retrieves the document job result and extracts table structure from the result",
-                "Handler": "image-analysis-postprocess-table.lambda_handler",
+                "Handler": "document-analysis-postprocess-table.lambda_handler",
                 "Role": { "Fn::GetAtt" : ["LambdaTextractRole", "Arn"] },
                 "Environment": {
                     "Variables" : 
@@ -388,7 +370,7 @@
             "DependsOn" : "LambdaTextractRole",
             "Properties": {
                 "Description" : "Python Lambda function that retrieves the document job result and extracts form fields from the result",
-                "Handler": "image-analysis-postprocess-form.lambda_handler",
+                "Handler": "document-analysis-postprocess-form.lambda_handler",
                 "Role": { "Fn::GetAtt" : ["LambdaTextractRole", "Arn"] },
                 "Environment": {
                     "Variables" : 
@@ -412,12 +394,41 @@
                 }
             }
         },  
-        "TextractResultRetrievalFunction": {
+        "TextractPostProcessTextFunction": {
             "Type": "AWS::Lambda::Function",
             "DependsOn" : "LambdaTextractRole",
             "Properties": {
-                "Description" : "Python Lambda function that retrieves the textract results in form of html tables and json dicitionary by reading files from s3 output location",
-                "Handler": "image-analysis-result-retrieval.lambda_handler",
+                "Description" : "Python Lambda function that retrieves the document job result and extracts lines of text from the result",
+                "Handler": "detect-text-postprocess-page.lambda_handler",
+                "Role": { "Fn::GetAtt" : ["LambdaTextractRole", "Arn"] },
+                "Environment": {
+                    "Variables" : 
+                        { 
+                            "AWS_DATA_PATH": "models",
+                            "max_retry_attempt": "3",   
+                            "retry_interval": "10",
+                            "max_results": "1000",
+                            "table_name": {"Ref" : "TextractDocumentAnalysisTable"}
+                        }
+                },                 
+                "Code": {
+                    "S3Bucket": { "Ref" : "LambdaCodeBucketName" },
+                    "S3Key": { "Ref" : "LambdaCodeFile" }
+                },
+                "Runtime": "python3.6",
+                "Timeout": "900",
+                "MemorySize": "1024",
+                "TracingConfig": {
+                    "Mode": "Active"
+                }
+            }
+        },          
+        "TextractDocumentAnalysisResultRetrievalFunction": {
+            "Type": "AWS::Lambda::Function",
+            "DependsOn" : "LambdaTextractRole",
+            "Properties": {
+                "Description" : "Python Lambda function that retrieves the textract results in form of html tables and json dictionary by reading files from s3 output location",
+                "Handler": "document-analysis-result-retrieval.lambda_handler",
                 "Role": { "Fn::GetAtt" : ["LambdaTextractRole", "Arn"] },
                 "Environment": {
                     "Variables" : 
@@ -437,23 +448,39 @@
                     "Mode": "Active"
                 }
             }
-        },                          
-        "LambdaInvokeS3Permission": {
-            "Type": "AWS::Lambda::Permission",
-            "DependsOn": "TextractAsyncJobSubmitFunction",
+        },     
+        "TextractTextDetectionResultRetrievalFunction": {
+            "Type": "AWS::Lambda::Function",
+            "DependsOn" : "LambdaTextractRole",
             "Properties": {
-                "FunctionName": {"Ref": "TextractAsyncJobSubmitFunction"},
-                "Action": "lambda:InvokeFunction",
-                "Principal": "s3.amazonaws.com",
-                "SourceArn": {"Fn::Join": [":",["arn","aws","s3","","", {"Fn::Join": ["-", [{"Ref": "AWS::AccountId"}, {"Ref": "DocumentBucketName"}]]}]]}
+                "Description" : "Python Lambda function that retrieves the textract results in form of lines of text by reading files from s3 output location",
+                "Handler": "detect-text-result-retrieval.lambda_handler",
+                "Role": { "Fn::GetAtt" : ["LambdaTextractRole", "Arn"] },
+                "Environment": {
+                    "Variables" : 
+                        { 
+                            "AWS_DATA_PATH": "models",
+                            "table_name": {"Ref" : "TextractDocumentAnalysisTable"}
+                        }
+                },                 
+                "Code": {
+                    "S3Bucket": { "Ref" : "LambdaCodeBucketName" },
+                    "S3Key": { "Ref" : "LambdaCodeFile" }
+                },
+                "Runtime": "python3.6",
+                "Timeout": "900",
+                "MemorySize": "1024",
+                "TracingConfig": {
+                    "Mode": "Active"
+                }
             }
-        },        
-        "AmazonTextractJobStatusTopic" : {
+        },                                                   
+        "DocumentAnalysisJobStatusTopic" : {
             "Type" : "AWS::SNS::Topic",
             "DependsOn": ["TextractPostProcessTableFunction", "TextractPostProcessFormFunction"],
-            "Condition": "AmazonTextractJobStatusTopicNameNotEmptyCondition",
+            "Condition": "DocumentAnalysisJobStatusTopicNameNotEmptyCondition",
             "Properties" : {
-                "DisplayName" : {"Fn::Join": ["-", [{"Ref": "AWS::Region"}, {"Ref": "AmazonTextractJobStatusTopicName"}]]},
+                "DisplayName" : {"Fn::Join": ["-", [{"Ref": "AWS::Region"}, {"Ref": "DocumentAnalysisJobStatusTopicName"}]]},
                 "Subscription": [
                     {
                         "Endpoint" : {"Fn::GetAtt" : ["TextractPostProcessTableFunction", "Arn"] },
@@ -462,33 +489,101 @@
                     {
                         "Endpoint" : {"Fn::GetAtt" : ["TextractPostProcessFormFunction", "Arn"] },
                         "Protocol": "lambda"
-                    }                
+                    }                                   
                 ]                  
             }          
         },    
         "PostProcessTableInvokeSNSPermission": {
             "Type": "AWS::Lambda::Permission",
-            "DependsOn": "AmazonTextractJobStatusTopic",
+            "DependsOn": "DocumentAnalysisJobStatusTopic",
             "Properties": {
                 "FunctionName": {"Ref": "TextractPostProcessTableFunction"},
                 "Action": "lambda:InvokeFunction",
                 "Principal": "sns.amazonaws.com",
-                "SourceArn": {"Ref": "AmazonTextractJobStatusTopic"}
+                "SourceArn": {"Ref": "DocumentAnalysisJobStatusTopic"}
             }
-        },        
+        },      
         "PostProcessFormInvokeSNSPermission": {
             "Type": "AWS::Lambda::Permission",
-            "DependsOn": "AmazonTextractJobStatusTopic",
+            "DependsOn": "DocumentAnalysisJobStatusTopic",
             "Properties": {
                 "FunctionName": {"Ref": "TextractPostProcessFormFunction"},
                 "Action": "lambda:InvokeFunction",
                 "Principal": "sns.amazonaws.com",
-                "SourceArn": {"Ref": "AmazonTextractJobStatusTopic"}
+                "SourceArn": {"Ref": "DocumentAnalysisJobStatusTopic"}
             }
-        },     
+        },               
+        "TextDetectionJobStatusTopic" : {
+            "Type" : "AWS::SNS::Topic",
+            "DependsOn": ["TextractPostProcessTextFunction"],
+            "Condition": "TextDetectionJobStatusTopicNameNotEmptyCondition",
+            "Properties" : {
+                "DisplayName" : {"Fn::Join": ["-", [{"Ref": "AWS::Region"}, {"Ref": "TextDetectionJobStatusTopicName"}]]},
+                "Subscription": [
+                    {
+                        "Endpoint" : {"Fn::GetAtt" : ["TextractPostProcessTextFunction", "Arn"] },
+                        "Protocol": "lambda"
+                    }                                       
+                ]                  
+            }          
+        },  
+        "PostProcessTextInvokeSNSPermission": {
+            "Type": "AWS::Lambda::Permission",
+            "DependsOn": "TextDetectionJobStatusTopic",
+            "Properties": {
+                "FunctionName": {"Ref": "TextractPostProcessTextFunction"},
+                "Action": "lambda:InvokeFunction",
+                "Principal": "sns.amazonaws.com",
+                "SourceArn": {"Ref": "TextDetectionJobStatusTopic"}
+            }
+        },           
+        "TextractAsyncJobSubmitFunction": {
+            "Type": "AWS::Lambda::Function",
+            "DependsOn" : ["DocumentAnalysisJobStatusTopic", "TextDetectionJobStatusTopic"],
+            "Properties": {
+                "Description" : "Python Lambda function that scans an input S3 bucket for scanned document, and invokes Textract to extract tables and forms.",
+                "Handler": "textract-job-submit-async.lambda_handler",
+                "Role": { "Fn::GetAtt" : ["LambdaTextractRole", "Arn"] },               
+                "Environment": {
+                    "Variables" : 
+                        { 
+                            "AWS_DATA_PATH": "models",
+                            "max_retry_attempt": "3",   
+                            "retry_interval": "30",                             
+                            "document_analysis_token_prefix": "TextractDocumentAnalysisJob",
+                            "text_detection_token_prefix": "TextractTextDetectionJob",
+                            "document_analysis_topic_arn": {"Ref": "DocumentAnalysisJobStatusTopic"},
+                            "text_detection_topic_arn": {"Ref": "TextDetectionJobStatusTopic"},
+                            "role_arn": {"Fn::Join": [":",["arn","aws","iam","",{"Ref": "AWS::AccountId"}, {"Fn::Join": ["/", ["role", {"Fn::Join": ["-", [{"Ref": "AWS::Region"}, {"Ref": "TextractRoleName"}]]}]]}]]},
+                            "role_name":  { "Ref": "LambdaTextractRole" },
+                            "table_name": {"Ref" : "TextractDocumentAnalysisTable"}
+                        }
+                },                 
+                "Code": {
+                    "S3Bucket": { "Ref" : "LambdaCodeBucketName" },
+                    "S3Key": { "Ref" : "LambdaCodeFile" }
+                },
+                "Runtime": "python3.6",
+                "Timeout": "900",
+                "MemorySize": "1024",
+                "TracingConfig": {
+                    "Mode": "Active"
+                }
+            }
+        },    
+        "DocumentAnalysisLambdaInvokeS3Permission": {
+            "Type": "AWS::Lambda::Permission",
+            "DependsOn": "TextractAsyncJobSubmitFunction",
+            "Properties": {
+                "FunctionName": {"Ref": "TextractAsyncJobSubmitFunction"},
+                "Action": "lambda:InvokeFunction",
+                "Principal": "s3.amazonaws.com",
+                "SourceArn": {"Fn::Join": [":",["arn","aws","s3","","", {"Fn::Join": ["-", [{"Ref": "AWS::AccountId"}, {"Ref": "DocumentBucketName"}]]}]]}
+            }
+        },                                      
         "TextractServiceRole": {
             "Type" : "AWS::IAM::Role",
-            "DependsOn": "AmazonTextractJobStatusTopic",            
+            "DependsOn": ["DocumentAnalysisJobStatusTopic", "TextDetectionJobStatusTopic"],            
             "Properties" : {  
                 "RoleName": {"Fn::Join": ["-", [{"Ref": "AWS::Region"}, {"Ref": "TextractRoleName"}]]},            
                 "AssumeRolePolicyDocument": {
@@ -519,17 +614,24 @@
                                     "Action": [
                                         "sns:Publish"
                                     ],
-                                    "Resource": {"Ref" : "AmazonTextractJobStatusTopic"}
-                                }                              
+                                    "Resource": {"Ref" : "DocumentAnalysisJobStatusTopic"}
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "sns:Publish"
+                                    ],
+                                    "Resource": {"Ref" : "TextDetectionJobStatusTopic"}
+                                }                                                                
                             ]
                         }
-                    }
+                    }                    
                 ]                                
             }
         },                            
         "DocumentBucket": {
             "Type": "AWS::S3::Bucket",
-            "DependsOn": ["LambdaInvokeS3Permission", "TextractAsyncJobSubmitFunction"],
+            "DependsOn": ["TextractAsyncJobSubmitFunction", "DocumentAnalysisLambdaInvokeS3Permission"],
             "Condition": "NewDocumentBucketCreation",          
             "Properties": {
                 "BucketName" : {"Fn::Join": ["-", [{"Ref": "AWS::AccountId"}, {"Ref": "DocumentBucketName"}]]},                
@@ -555,7 +657,7 @@
                             "Function" : {"Fn::GetAtt": ["TextractAsyncJobSubmitFunction", "Arn"]},
                             "Filter" : { "S3Key" : { "Rules" : [ { "Name" : "suffix", "Value" : "jpeg" } ] } }
 
-                        }                      
+                        }                                               
                     ]
                 }                
             },
@@ -601,7 +703,7 @@
         },
         "TextractDemoAPI": {
             "Type": "AWS::ApiGateway::RestApi",
-            "DependsOn": ["TextractAsyncJobSubmitFunction", "TextractResultRetrievalFunction"],
+            "DependsOn": ["TextractAsyncJobSubmitFunction", "TextractDocumentAnalysisResultRetrievalFunction", "TextractTextDetectionResultRetrievalFunction"],
             "Properties": {
                 "Name": "Textract Demo API",
                 "Description" : "API to invoke Textract with documents on specified S3 bucket, and extract text features",
@@ -718,8 +820,8 @@
                                     "type":"mock"
                                 }
                             }
-                        },
-                        "/retrievetextanalysisresult":{
+                        },                   
+                        "/retrievedocumentanalysisresult":{
                             "get":{
                                 "consumes":[
                                     "application/json"
@@ -770,7 +872,7 @@
                                         }
                                     },
                                     "uri": {"Fn::Join": ["",
-                                        ["arn:aws:apigateway:", {"Ref": "AWS::Region"}, ":lambda:path/2015-03-31/functions/", {"Fn::GetAtt": ["TextractResultRetrievalFunction", "Arn"]}, "/invocations"]
+                                        ["arn:aws:apigateway:", {"Ref": "AWS::Region"}, ":lambda:path/2015-03-31/functions/", {"Fn::GetAtt": ["TextractDocumentAnalysisResultRetrievalFunction", "Arn"]}, "/invocations"]
                                     ]},
                                     "passthroughBehavior":"when_no_templates",
                                     "httpMethod":"POST",
@@ -825,7 +927,108 @@
                                     "type":"mock"
                                 }
                             }
-                        }                        
+                        },
+                        "/retrievetextdetectionresult":{
+                            "get":{
+                                "consumes":[
+                                    "application/json"
+                                ],
+                                "produces":[
+                                    "application/json"
+                                ],
+                                "parameters":[
+                                    {
+                                        "name":"Bucket",
+                                        "in":"query",
+                                        "required":true,
+                                        "type":"string"
+                                    },
+                                    {
+                                        "name":"Document",
+                                        "in":"query",
+                                        "required":true,
+                                        "type":"string"
+                                    }
+                                ],
+                                "responses":{
+                                    "200":{
+                                        "description":"200 response",
+                                        "schema":{
+                                            "$ref":"#/definitions/Empty"
+                                        },
+                                        "headers":{
+                                            "Access-Control-Allow-Origin":{
+                                                "type":"string"
+                                            }
+                                        }
+                                    }
+                                },
+                                "x-amazon-apigateway-integration":{
+                                    "responses":{
+                                        "default":{
+                                            "statusCode":"200",
+                                            "responseParameters":{
+                                                "method.response.header.Access-Control-Allow-Origin":"'*'"
+                                            }
+                                        }
+                                    },
+                                    "uri": {"Fn::Join": ["",
+                                        ["arn:aws:apigateway:", {"Ref": "AWS::Region"}, ":lambda:path/2015-03-31/functions/", {"Fn::GetAtt": ["TextractTextDetectionResultRetrievalFunction", "Arn"]}, "/invocations"]
+                                    ]},
+                                    "passthroughBehavior":"when_no_templates",
+                                    "httpMethod":"POST",
+                                    "requestTemplates":{
+                                        "application/json":"{ \"DocumentBucket\": \"$input.params('Bucket')\",\"DocumentKey\": \"$input.params('Document')\"}"
+                                    },
+                                    "contentHandling":"CONVERT_TO_TEXT",
+                                    "type":"aws"
+                                }
+                            },
+                            "options":{
+                                "consumes":[
+                                    "application/json"
+                                ],
+                                "produces":[
+                                    "application/json"
+                                ],
+                                "responses":{
+                                    "200":{
+                                        "description":"200 response",
+                                        "schema":{
+                                            "$ref":"#/definitions/Empty"
+                                        },
+                                        "headers":{
+                                            "Access-Control-Allow-Origin":{
+                                                "type":"string"
+                                            },
+                                            "Access-Control-Allow-Methods":{
+                                                "type":"string"
+                                            },
+                                            "Access-Control-Allow-Headers":{
+                                                "type":"string"
+                                            }
+                                        }
+                                    }
+                                },
+                                "x-amazon-apigateway-integration":{
+                                    "responses":{
+                                        "default":{
+                                            "statusCode":"200",
+                                            "responseParameters":{
+                                                "method.response.header.Access-Control-Allow-Methods":"'GET,OPTIONS'",
+                                                "method.response.header.Access-Control-Allow-Headers":"'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
+                                                "method.response.header.Access-Control-Allow-Origin":"'*'"
+                                            }
+                                        }
+                                    },
+                                    "passthroughBehavior":"when_no_match",
+                                    "requestTemplates":{
+                                        "application/json":"{\"statusCode\": 200}"
+                                    },
+                                    "type":"mock"
+                                }
+                            }
+                        }                                                        
                     },
                     "definitions":{
                         "Empty":{
@@ -836,7 +1039,7 @@
                 }
             }
         },
-        "JobSubmitLambdaInvokeAPIPermission": {
+        "TextractAsyncJobSubmitFunctionLambdaInvokeAPIPermission": {
             "Type": "AWS::Lambda::Permission",
             "DependsOn": "TextractDemoAPI",
             "Properties": {
@@ -847,17 +1050,27 @@
         ["arn:aws:execute-api:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"}, ":", {"Ref": "TextractDemoAPI"}, "/*"]
                 ]}
             }
-        },
-        "ResultRetrievalLambdaInvokeAPIPermission": {
+        },     
+        "DocumentAnalysisResultRetrievalLambdaInvokeAPIPermission": {
             "Type": "AWS::Lambda::Permission",
             "DependsOn": "TextractDemoAPI",
             "Properties": {
                 "Action": "lambda:invokeFunction",
-                "FunctionName": {"Fn::GetAtt": ["TextractResultRetrievalFunction", "Arn"]},
+                "FunctionName": {"Fn::GetAtt": ["TextractDocumentAnalysisResultRetrievalFunction", "Arn"]},
                 "Principal": "apigateway.amazonaws.com",
                 "SourceArn": {"Fn::Join": ["",["arn:aws:execute-api:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"}, ":", {"Ref": "TextractDemoAPI"}, "/*"]]}
             }
-        },        
+        },  
+        "TextDetectionResultRetrievalLambdaInvokeAPIPermission": {
+            "Type": "AWS::Lambda::Permission",
+            "DependsOn": "TextractDemoAPI",
+            "Properties": {
+                "Action": "lambda:invokeFunction",
+                "FunctionName": {"Fn::GetAtt": ["TextractTextDetectionResultRetrievalFunction", "Arn"]},
+                "Principal": "apigateway.amazonaws.com",
+                "SourceArn": {"Fn::Join": ["",["arn:aws:execute-api:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"}, ":", {"Ref": "TextractDemoAPI"}, "/*"]]}
+            }
+        },                
         "TextractDemoAPIDeployment": {
             "Type": "AWS::ApiGateway::Deployment",
             "DependsOn": "TextractDemoAPI",
