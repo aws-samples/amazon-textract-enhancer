@@ -243,6 +243,56 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 - The topic named `TextDetectionJobStatusTopic` adds lambda protocol subscription for `TextractPostProcessTextFunction`. 
 
 ### 3.4. Textract service role
+-In order to be able to publish job completion messages to specified SNS topic, Textract also needs to assume a role that has policies attahced, allowing publlish access to the respective topics. This service role needs to be created and the ARN passed to textract with the asynchronous job submission.
+<details>
+<summary>Following snippet shows the assume role policy document for the Textract service role (expand for details)</summary><p>
+
+```
+"AssumeRolePolicyDocument": {
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Service": [
+                    "textract.amazonaws.com"
+                ]
+            },
+            "Action": [
+                "sts:AssumeRole"
+            ]
+        }                       
+    ]
+}
+```   
+</p></details>
+
+- Since we use two different SNS topics, the policies attached to this role needs to allow publish access to both of these topics.
+<details>
+<summary>Following snippet shows the policy document with policies allowing access to both topics(expand for details)</summary><p>
+
+``` 
+"PolicyDocument": {
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "sns:Publish"
+            ],
+            "Resource": {"Ref" : "DocumentAnalysisJobStatusTopic"}
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "sns:Publish"
+            ],
+            "Resource": {"Ref" : "TextDetectionJobStatusTopic"}
+        }                                                                
+    ]
+}
+``` 
+</p></details>
 
 ### 3.5. Job submission - Lambda function
 
