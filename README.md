@@ -20,3 +20,48 @@ In this Textract enhancer solution, as demonstrated in this workshop, following 
 ## License Summary
 
 This sample code is made available under a modified MIT license. See the [LICENSE](LICENSE) file.
+
+## Prerequisites
+
+In order to complete this workshop you'll need an AWS Account with access to create:
+- AWS IAM Roles
+- S3 Bucket
+- S3 bucket policies
+- SNS topics
+- DynamoDB tables
+- Lambda functions
+- API Gateway endpoints and deployments
+    
+## 1. Launch stack
+
+Textract Enhancer solution components can each be built by hand, either using [AWS Console](https://console.aws.amazon.com/) or using AWS CLI. AWS Cloudformation on the other hand provides mechanism to script the hard work of launching the whole stack. 
+You can use the button below to launch the solution stack, the component details of which you can find in the following section.
+
+Region| Launch
+------|-----
+US East (N. Virginia) | [![Launch Textract Enhancer in us-east-1](http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/images/cloudformation-launch-stack-button.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=textract-enhancer&templateURL=https://s3.amazonaws.com/my-python-packages/textract-api-stack.json)
+
+
+
+## 2. Solution components
+
+### 2.1. DyanmoDB Table
+
+### 2.2. Lambda execution role
+
+### 2.3. DyanmoDB Table
+
+### 2.4. SNS Topic
+
+### 2.5. Textract service role
+
+### 2.6. Job submission - Lambda function
+
+### 2.7. Post Processing - Lambda functions
+
+### 2.8. S3 Bucket
+
+### 2.9. Rest API
+
+
+
