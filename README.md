@@ -59,8 +59,7 @@ The solution also uses Rest API backed by anotyher set of Lambda functions and t
 - Upon completion of a job, post processing Lambda functions update the corresponding records in this DynamoDB table with location of the extracted files, as stored in S3 bucket, and other metadata such as completion time, number of pages, lines, tables and form fields.
 
 <details>
-<summary><strong>Following snippet shows the schema definition used in defining the table (expand for details)</strong></summary><p>
-
+<summary>Following snippet shows the schema definition used in defining the table (expand for details)</summary><p>
 ```
 "AttributeDefinitions": [
     {
@@ -116,6 +115,119 @@ The solution also uses Rest API backed by anotyher set of Lambda functions and t
 </p></details>
 
 ### 3.2. Lambda execution role
+- Lambda functions used in this solution prototype uses a common execution role that allows it to assume the role, to which required policies are attached.
+<details>
+<summary>Following snippet shows the assume role policy document for the Lambda execution role (expand for details)</summary><p>
+```
+"AssumeRolePolicyDocument": {
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Service": [
+                    "lambda.amazonaws.com"
+                ]
+            },
+            "Action": [
+                "sts:AssumeRole"
+            ]
+        }                       
+    ]
+}
+```            
+</p></details>
+
+- Basic execution policy allows the Lambda functions to publish events to Cloudwatch logs.
+<details>
+<summary>Following snippet shows the basic execution role policy document (expand for details)</summary><p>
+```
+{
+    "PolicyName": "lambda_basic_execution_policy",
+    "PolicyDocument": {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                ],
+                "Resource": "arn:aws:logs:*:*:*"
+            },
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "xray:PutTraceSegments"
+                ],
+                "Resource": "*"
+            }                                
+        ]
+    }
+}
+```            
+</p></details>
+
+- Textract access policy attached to this role allows Lambda functions to execute Textract API calls.
+<details>
+<summary>Following snippet shows the Textract access policy document (expand for details)</summary><p>
+```
+{
+    "PolicyName": "textract_access_policy",
+    "PolicyDocument": {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": "textract:*",
+                "Resource": "*"
+            }                             
+        ]
+    }
+} 
+```            
+</p></details>
+
+- DynamoDB access policy attached to this role allows Lambda functions to write records to and read records from the tracking table.
+<details>
+<summary>Following snippet shows the DynamoDB access policy document (expand for details)</summary><p>
+```
+{
+    "PolicyName": "dynamodb_access_policy",
+    "PolicyDocument": {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": "dynamodb:*",
+                "Resource": "*"
+            }                             
+        ]
+    }
+}
+```            
+</p></details>
+
+- An IAM access policy is attached to this role, to enable the Lambda function because when invoked with a bucket name owned by another AWS account, the job submission Lambda function automatically creates an IAM policy and attaches to itself, thereby allowing access to documents stored in the provided bucket.
+<details>
+<summary>Following snippet shows the IAM access policy document (expand for details)</summary><p>
+```
+{
+    "PolicyName": "iam_access_policy",
+    "PolicyDocument": {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": "iam:*",
+                "Resource": "*"
+            }                             
+        ]
+    }
+}
+```            
+</p></details>
 
 ### 3.3. DyanmoDB Table
 
