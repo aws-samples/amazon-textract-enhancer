@@ -60,6 +60,7 @@ The solution also uses Rest API backed by anotyher set of Lambda functions and t
 
 <details>
 <summary>Following snippet shows the schema definition used in defining the table (expand for details)</summary><p>
+
 ```
 "AttributeDefinitions": [
     {
@@ -118,6 +119,7 @@ The solution also uses Rest API backed by anotyher set of Lambda functions and t
 - Lambda functions used in this solution prototype uses a common execution role that allows it to assume the role, to which required policies are attached.
 <details>
 <summary>Following snippet shows the assume role policy document for the Lambda execution role (expand for details)</summary><p>
+
 ```
 "AssumeRolePolicyDocument": {
     "Version": "2012-10-17",
@@ -141,6 +143,7 @@ The solution also uses Rest API backed by anotyher set of Lambda functions and t
 - Basic execution policy allows the Lambda functions to publish events to Cloudwatch logs.
 <details>
 <summary>Following snippet shows the basic execution role policy document (expand for details)</summary><p>
+
 ```
 {
     "PolicyName": "lambda_basic_execution_policy",
@@ -172,6 +175,7 @@ The solution also uses Rest API backed by anotyher set of Lambda functions and t
 - Textract access policy attached to this role allows Lambda functions to execute Textract API calls.
 <details>
 <summary>Following snippet shows the Textract access policy document (expand for details)</summary><p>
+
 ```
 {
     "PolicyName": "textract_access_policy",
@@ -192,6 +196,7 @@ The solution also uses Rest API backed by anotyher set of Lambda functions and t
 - DynamoDB access policy attached to this role allows Lambda functions to write records to and read records from the tracking table.
 <details>
 <summary>Following snippet shows the DynamoDB access policy document (expand for details)</summary><p>
+
 ```
 {
     "PolicyName": "dynamodb_access_policy",
@@ -212,6 +217,7 @@ The solution also uses Rest API backed by anotyher set of Lambda functions and t
 - An IAM access policy is attached to this role, to enable the Lambda function because when invoked with a bucket name owned by another AWS account, the job submission Lambda function automatically creates an IAM policy and attaches to itself, thereby allowing access to documents stored in the provided bucket.
 <details>
 <summary>Following snippet shows the IAM access policy document (expand for details)</summary><p>
+
 ```
 {
     "PolicyName": "iam_access_policy",
