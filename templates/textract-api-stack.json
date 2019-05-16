@@ -48,12 +48,12 @@
             "AllowedPattern": "^([a-z]|(\\d(?!\\d{0,2}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})))([a-z\\d]|(\\.(?!(\\.|-)))|(-(?!\\.))){1,61}[a-z\\d\\.]$",
             "Default": "my-python-packages",
             "ConstraintDescription" : "Should be a Valid S3 Bucket Name",
-            "Description": "Existing S3 Bucket ARN where lambda package for textract based document analysis function is hosted."            
+            "Description": "S3 Bucket hosting lambda code package (DO NOT CHANGE)"            
         },  
         "LambdaCodeFile" :{
             "Type": "String",
             "Default": "textract-lambda-code.zip",
-            "Description": "Zip Filename containing the lambda code and dependencies"            
+            "Description": "Zip file containing the lambda code (DO NOT CHANGE)"            
         }             
     },  
     "Conditions": {
@@ -67,7 +67,7 @@
         "TextractDocumentAnalysisTable": {
             "Type": "AWS::DynamoDB::Table",
             "Properties": {
-                "TableName": {"Ref" : "DynamoDBTableName"},
+                "TableName": {"Fn::Join": ["-", [{"Ref": "AWS::AccountId"}, {"Ref": "DynamoDBTableName"}]]},
                 "AttributeDefinitions": [
                     {
                         "AttributeName": "JobId",
@@ -1083,5 +1083,37 @@
                 }
             }
         }                                          
-    }    
+    },
+    "Outputs" : {       
+        "DocumentBucket" : {
+            "Description" : "S3 Bucket used to stage the documents to be analysed and the resulting files",
+            "Value" : {
+                "Ref" : "DocumentBucket"
+            }
+        },           
+        "UnicornFeedbackDynamoDBTable" : {
+            "Description" : "DynamoDB Table name where customer feedbacks would be stored.",
+            "Value" : {
+                "Ref" : "TextractDocumentAnalysisTable"
+            }
+        },   
+        "NLPWorkshopAPIId": {
+            "Description" : "Rest API for Textract Enhancer Demo API",
+            "Value": {
+                "Ref": "TextractDemoAPI"
+            }
+        },              
+        "NLPWorkshopAPIRootResource": {
+            "Description" : "Rest API root resource for Textract Enhancer Demo API",
+            "Value": {
+                "Fn::GetAtt": ["TextractDemoAPI", "RootResourceId"]
+            }
+        },                        
+        "NLPWorkshopAPIDeploymentId": {
+            "Description" : "Rest API Deplyment ID Textract Enhancer Demo API",
+            "Value": {
+                "Ref": "TextractDemoAPIDeployment"
+            }
+        }       
+    }            
 }
