@@ -1091,28 +1091,16 @@
                 "Ref" : "DocumentBucket"
             }
         },           
-        "UnicornFeedbackDynamoDBTable" : {
-            "Description" : "DynamoDB Table name where customer feedbacks would be stored.",
+        "TextractTrackingTable" : {
+            "Description" : "DynamoDB Table name where Textract job status and result metadata is stored.",
             "Value" : {
                 "Ref" : "TextractDocumentAnalysisTable"
             }
-        },   
-        "NLPWorkshopAPIId": {
-            "Description" : "Rest API for Textract Enhancer Demo API",
+        },                                     
+        "TextractEnhancerAPIInvokeURL": {
+            "Description" : "Rest API Invoke URL that can be used to submit jobs and retrieve Textract results",
             "Value": {
-                "Ref": "TextractDemoAPI"
-            }
-        },              
-        "NLPWorkshopAPIRootResource": {
-            "Description" : "Rest API root resource for Textract Enhancer Demo API",
-            "Value": {
-                "Fn::GetAtt": ["TextractDemoAPI", "RootResourceId"]
-            }
-        },                        
-        "NLPWorkshopAPIDeploymentId": {
-            "Description" : "Rest API Deplyment ID Textract Enhancer Demo API",
-            "Value": {
-                "Ref": "TextractDemoAPIDeployment"
+                "Fn::Join": ["/",["https:", "", {"Fn::Join": [".", [{"Ref": "TextractDemoAPI"}, "execute-api", {"Ref": "AWS::Region"}, "amazonaws", "com"]]}, "demo"]]
             }
         }       
     }            
