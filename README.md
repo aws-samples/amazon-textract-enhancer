@@ -121,6 +121,8 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 </p></details>
 
 ### 3.2. Lambda execution role
+<details><p>
+
 - Lambda functions used in this solution prototype uses a common execution role that allows it to assume the role, to which required policies are attached.
 <details>
 <summary>Following snippet shows the assume role policy document for the Lambda execution role (expand for details)</summary><p>
@@ -239,15 +241,20 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 }
 ```            
 </p></details>
-
+</p></details>
 
 ### 3.3. SNS Topic
+<details><p>
+
 - When submitting asynchronous jobs to Textract, an SNS topic needs to be specified, which textract uses to post the job completion messages. The messages posted to this topic would contain the same unique job-id that was generated and returned during submission API call. Subsequent retrieval calls will then use this job-id to obtain the results for the corresponding Textract jobs.
 - Since `DocumentAnalaysis` and `TextDetection` are separate job types, that requires post processing by different Lambda functions, two different SNS topics are used, on order to have a clear separation of channels.
 - The topic named `DocumentAnalysisJobStatusTopic` adds lambda protocol subscriptions for `TextractPostProcessTableFunction` and `TextractPostProcessFormFunction`. 
 - The topic named `TextDetectionJobStatusTopic` adds lambda protocol subscription for `TextractPostProcessTextFunction`. 
+</p></details>
 
 ### 3.4. Textract service role
+<details><p>
+
 - In order to be able to publish job completion messages to specified SNS topic, Textract also needs to assume a role that has policies attahced, allowing publlish access to the respective topics. This service role needs to be created and the ARN passed to textract with the asynchronous job submission.
 <details>
 <summary>Following snippet shows the assume role policy document for the Textract service role (expand for details)</summary><p>
@@ -298,8 +305,11 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 }
 ``` 
 </p></details>
+</p></details>
 
 ### 3.5. Job submission - Lambda function
+<details><p>
+
 - A Lambda function, named `TextractAsyncJobSubmitFunction` is used to invoke both `DocumentAnalysis` and `TextDetection` API calls to Textract. Several environment variables are passed to this function:
     - `document_analysis_token_prefix`: an unique string used to identify the document analysis jobs. This is used alongwith the bucket and document name to indicate to Textract the uniqueness of submissions. Based on this, Textract wither runs a fresh job or responds with a job-id generated during a prior submission of same document. 
     - `text_detection_token_prefix`: an unique string used to identify the text detection jobs. This is used alongwith the bucket and document name to indicate to Textract the uniqueness of submissions. Based on this, Textract wither runs a fresh job or responds with a job-id generated during a prior submission of same document.
@@ -313,8 +323,11 @@ The solution also uses Rest API backed by another set of Lambda functions and th
     - Submit document analysis job using `start_document_analysis` method
     - Submit text detection job using `start_document_text_detection` method
     - Create or update DynamoDB records for both job types
+</p></details>
 
 ### 3.6. Post Processing - Lambda functions
+<details><p>
+
 - There are 3 separate Lambda functions, all triggered when job completion messages are posted by Textract to the respective SNS topics.
 - A Lambda function, named `TextractPostProcessTableFunction` is triggered when a `DocumentAnalysis` job completion message is posted to `DocumentAnalysisJobStatusTopic`. Once invoked, this function executes following actions:
     - Obtain unique Job-Id and Document location from the posted message
@@ -338,6 +351,8 @@ The solution also uses Rest API backed by another set of Lambda functions and th
     - These dictionary elements are nested within outer dictionary with Page number as keys
     - Save the extracted lines as JSON file under a upload folder marked by the job-id, created underneath the document location folder in the same S3 bucket
     - Update the DynamoDB record for the correpsonding JobId and JobType with completion information, result metadata (number of pages and lines), and the location on S3 bucket where the resulting files are uploaded.
+</p></details>
+    
 ### 3.8. S3 Bucket
 
 ### 3.6. Result Retrieval - Lambda functions
