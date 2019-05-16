@@ -54,6 +54,7 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 </p></details>
 
 ## 3. Solution components
+<details><p>
 
 ### 3.1. DyanmoDB Table
 <details><p>
@@ -363,10 +364,20 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 
 ### 3.8. Result Retrieval - Lambda functions
 <details><p>
+
+- After the post processing is completed the results are stored in JSON and HTML files (as appropriate) under the folders marked by unique Job-Ids for the corresponding documents. 
+- The solution includes two Lambda functions - `TextractDocumentAnalysisResultRetrievalFunction` and `TextractTextDetectionResultRetrievalFunction`, that when invoked with document name and bucket location, scans the DynamoDB table to get the document metadata, and returns the same, alongwith actual content of the resulting files, fetched from the S3 bucket location.
+- The retrieval functions provides a way for on-demand querying of the Textract results, without actually sending a request to Textract everytime the document results are needed.
 </p></details>
 
 ### 3.9. Rest API
 <details><p>
-</p></details>
 
+- Retrieval functions can be used programmatically to acces the Textract results anytime, but that works only when the user is an authenticated IAM user of the same AWS account. Rest API create using Amazon API Gateway expands this capability to outside the acocunt boundary.
+- The Rest API invokes an endpoint to trigger a Textract job submission, and two endpoints to extract the results of document analysis and text detection.
+- `submittextanalysisjob` method can be invoked with two parameters - Bucket and Document, which in turn invokes `TextractAsyncJobSubmitFunction` Lambda function and submits the specifies document for document analysis and text detection processing.
+- `retrievedocumentanalysisresult` method can be invoked with parameters - Bucket, Document, and optionally ResultType, which in turn invokes `TextractDocumentAnalysisResultRetrievalFunction` Lambda function to return tables, forms or both.
+- `retrievetextdetectionresult` method can be invoked with parameters - Bucket, Document, which in turn invokes `TextractTextDetectionResultRetrievalFunction` Lambda function to return lines of texts grouped by pages.
+</p></details>
+</p></details>
 
