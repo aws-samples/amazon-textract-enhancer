@@ -45,6 +45,7 @@ US East (N. Virginia) | [![Launch Textract Enhancer in us-east-1](http://docs.aw
 
 ## 2. Architecture
 <details><p>
+
 The solution architecture is based solely upon serverless Lambda functions, invoking Textract API endpoints. The architecture uses Textract in asynchronous mode, and uses a DynamoDB table to keep track of job status and response location.
     ![Job submission architecture](images/job-submission-architecture.png)
 
