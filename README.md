@@ -56,6 +56,8 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 ## 3. Solution components
 
 ### 3.1. DyanmoDB Table
+<details><p>
+
 - When a Textract job is submitted in asynchronous mode, using a request token, it creates a unique job-id is created. For any subsequent submissions with same document, it prevents Textract from running the same job over again. Since in this solution, two different types of jobs are submitted, one for `DocumentAnalysis` and one for `TextDetection`, a DynamoDB table is used with `JobId` as HASH key and `JobType` as RANGE key, to track the status of the job.
 - In order to facilitate table scan with the document location, the table also use a global secondary index, with `DocumentBucket` as HASH key and `DocumentPath` as RANGE key. This information is used by the retrieval functions later when an API request is sent to obtain the tables, forms and lines of texts.
 - Upon completion of a job, post processing Lambda functions update the corresponding records in this DynamoDB table with location of the extracted files, as stored in S3 bucket, and other metadata such as completion time, number of pages, lines, tables and form fields.
@@ -115,6 +117,7 @@ The solution also uses Rest API backed by another set of Lambda functions and th
     }
 ],   
 ```            
+</p></details>
 </p></details>
 
 ### 3.2. Lambda execution role
