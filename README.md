@@ -381,3 +381,61 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 </p></details>
 </p></details>
 
+
+## 4. Usage Instructions
+<details><p>
+
+- Textract Job start by document upload to bucket 
+    - Once the stack gets deployed, it creates an S3 bucket, to be used as a staging bucket. Notice that during creation, the AWS Account-Id gets added to the chosen name of the S3 bucket, to ensure uniqueness of bocket name.
+    - Open the bucket, as specified in the Cloudformation stack output, in S3 console, and optionally create folders and subfolders (if needed, to group your documents)
+    - Upload scanned image of a printed document or PDF document containing texts anywhere on the bucket, and wait for few seconds to minutes, depending on the number of pages and amount of text.
+    - During this time, you can check the Cloudwatch Log output for `TextractAsyncJobSubmitFunction` Lambda function to ensure that the function is triggered and submitting the two jobs to Textract
+    - You can also open the DynamoDB table, as marked in the stack output, in the console, and verify that 2 rows have been created, that contains job-id, job-type, bucket, document, and start-timestamp.
+    - After a while, you can refresh the table items, and notice that the records got updated with completion-timestamp, numbers of pages, lines, form-fields, tables, and upload locations of the resulting files for 3 kinds of outputs.
+    - Alongside, you can also monitor Cloudwatch Log outputs for all 3 post processing Lambda functions - `TextractPostProcessTableFunction`, `TextractPostProcessFormFunction`, and `TextractPostProcessTextFunction`, to ensure that all of those got triggered, retrieved the raw results from Textract, finished post-processing and uploaded the results to S3 bucket.
+
+- Textract Job start by API Invocation
+    - If you already have documents present in bucket, or not the owner of the bucket, you can still trigger the same workflow as above, by sending a request to Rest API method as follows:
+        https://deployment-id.execute-api.us-east-1.amazonaws.com/demo/submittextanalysisjob?Bucket=your-bucket-name&Document=your-document-key
+    You can find the deployment-id of the API from the stack output.
+    - Notice however that when you are running with an S3 bucket owned by a different AWS account that the one running this solution, you need to first add the following to the origin bucket policy (where source-account-id is the account-id of the AWS account where the solution stack is deployed):
+    ```
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Principal": {
+                    "AWS": "arn:aws:iam::source-account-id:role/LambdaTextractRole"
+                },
+                "Action": [
+                    "s3:GetObject",
+                    "s3:GetObjectVersion",
+                    "s3:PutObject",
+                    "s3:PutObjectAcl"
+                ],
+                "Resource": "arn:aws:s3:::/*"
+            },
+            {
+                "Effect": "Allow",
+                "Principal": {
+                    "AWS": "arn:aws:iam::source-account-id:role/LambdaTextractRole"
+                },
+                "Action": [
+                    "s3:ListBucket",
+                    "s3:ListBucketVersions"
+                ],
+                "Resource": "arn:aws:s3:::"
+            }
+        ]
+    }
+    ```
+- Textract result retrieval via Rest API
+    - If the initial submission goes well, and does not exceed provisioned throughput for maximum number of trials, result will be ready and post-processed within few seconds to minutes.
+    - At that point, the document analysis result can be retrieved by invoking Rest API method as follows:
+        https://deployment-id.execute-api.us-east-1.amazonaws.com/demo/retrievedocumentanalysisresult?Bucket=your-bucket-name&Document=your-document-key&ResultType=ALL|TABLE|FORM
+    - Similarly text detection result can be obtained by invoking Rest API method as follows:
+        https://deployment-id.execute-api.us-east-1.amazonaws.com/demo/retrievetextdetectionresult?Bucket=your-bucket-name&Document=your-document-key
+    You can find the deployment-id of the API from the stack output.
+    - In both cases, the API response will contain a list of files on S3 bucket where the results are stored for future use. You can also download and open the result files, either to inspect the contents manually, or to feed in to some downstream application/processes, as needed.
+</p></details>
