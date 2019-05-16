@@ -352,12 +352,21 @@ The solution also uses Rest API backed by another set of Lambda functions and th
     - Save the extracted lines as JSON file under a upload folder marked by the job-id, created underneath the document location folder in the same S3 bucket
     - Update the DynamoDB record for the correpsonding JobId and JobType with completion information, result metadata (number of pages and lines), and the location on S3 bucket where the resulting files are uploaded.
 </p></details>
-    
-### 3.8. S3 Bucket
 
-### 3.6. Result Retrieval - Lambda functions
+### 3.7. S3 Bucket
+<details><p>
+
+- An S3 bucket is used as a staging area where the documents that needs to be analysed are uploaded. The same bucket is also used to store the analysis results.
+- This bucket is configures with triggers such that whenever a docuemtn image (PDF or JPEG) is uploaded, the lambda function for job submission gets triggered, and submits the uploaded document to Textract for processing.
+- Bucket policy attached to this bucket is used to extend read/write access to this bucket for the Lambda execution role. The advantage of doing so instead of adding policy statements with S3 access during the execution role declaration is that, it serves to show how such access can be extended and revoked at run-time. In fact, when the job submission function is triggered by invoking the API method with external bucket name, the submission function first creates a policy to grant the Lambda execution role with required read/write access to the specified bucket.
+</p></details>
+
+### 3.8. Result Retrieval - Lambda functions
+<details><p>
+</p></details>
 
 ### 3.9. Rest API
-
+<details><p>
+</p></details>
 
 
