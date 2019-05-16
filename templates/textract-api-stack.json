@@ -1086,22 +1086,122 @@
     },
     "Outputs" : {       
         "DocumentBucket" : {
-            "Description" : "S3 Bucket used to stage the documents to be analysed and the resulting files",
+            "Description" : "Upload documents on this bucket to analyze using Textract",
             "Value" : {
-                "Ref" : "DocumentBucket"
+                "Fn::Join": ["&",[
+                    { "Fn::Join": ["?",[                    
+                        {"Fn::Join": ["/",["https:", "", "s3.console.aws.amazon.com", "s3", "buckets", {"Ref" : "DocumentBucket"}]]},
+                        {"Fn::Join": ["=",["region", {"Ref": "AWS::Region"}]]}
+                    ]]
+                    },"tab=items"]]
             }
         },           
         "TextractTrackingTable" : {
-            "Description" : "DynamoDB Table name where Textract job status and result metadata is stored.",
+            "Description" : "Tracking Textract job status and result metadata in this table",
             "Value" : {
-                "Ref" : "TextractDocumentAnalysisTable"
+                "Fn::Join": [";",[
+                    { "Fn::Join": ["=",[
+                        { "Fn::Join": [":",[
+                            { "Fn::Join": ["#",[
+                                { "Fn::Join": ["?",[
+                                    {"Fn::Join": ["/",["https:", "", "console.aws.amazon.com", "dynamodb", "home"]]},
+                                    {"Fn::Join": ["=",["region", {"Ref": "AWS::Region"}]]}
+                                ]]
+                                }, "tables"]]
+                            },"selected"]]
+                        }, {"Ref": "TextractDocumentAnalysisTable"}]]
+                    },"tab=items"]]
             }
         },                                     
         "TextractEnhancerAPIInvokeURL": {
-            "Description" : "Rest API Invoke URL that can be used to submit jobs and retrieve Textract results",
+            "Description" : "API to submit jobs and retrieve Textract results",
             "Value": {
                 "Fn::Join": ["/",["https:", "", {"Fn::Join": [".", [{"Ref": "TextractDemoAPI"}, "execute-api", {"Ref": "AWS::Region"}, "amazonaws", "com"]]}, "demo"]]
             }
-        }       
+        },
+        "TextractAsyncJobSubmitFunction": {
+            "Description" : "Function to submit Textract jobs",
+            "Value": {     
+                "Fn::Join": ["/",[
+                { 
+                    "Fn::Join": ["#",[
+                    { "Fn::Join": ["?",[
+                        {"Fn::Join": ["/",["https:", "", "console.aws.amazon.com", "lambda", "home"]]},
+                        {"Fn::Join": ["=",["region", {"Ref": "AWS::Region"}]]}
+                    ]]
+                    }, "/functions"]]
+                },{"Ref": "TextractAsyncJobSubmitFunction"}]]
+            } 
+        },          
+        "TextractPostProcessTableFunction": {
+            "Description" : "Function to extract tables from Textract response",
+            "Value": {     
+                "Fn::Join": ["/",[
+                { 
+                    "Fn::Join": ["#",[
+                    { "Fn::Join": ["?",[
+                        {"Fn::Join": ["/",["https:", "", "console.aws.amazon.com", "lambda", "home"]]},
+                        {"Fn::Join": ["=",["region", {"Ref": "AWS::Region"}]]}
+                    ]]
+                    }, "/functions"]]
+                },{"Ref": "TextractPostProcessTableFunction"}]]
+            }                
+        },  
+        "TextractPostProcessFormFunction": {
+            "Description" : "Function to extract form fields from Textract response",
+            "Value": {     
+                "Fn::Join": ["/",[
+                { 
+                    "Fn::Join": ["#",[
+                    { "Fn::Join": ["?",[
+                        {"Fn::Join": ["/",["https:", "", "console.aws.amazon.com", "lambda", "home"]]},
+                        {"Fn::Join": ["=",["region", {"Ref": "AWS::Region"}]]}
+                    ]]
+                    }, "/functions"]]
+                },{"Ref": "TextractPostProcessFormFunction"}]]            
+            }
+        },  
+        "TextractPostProcessTextFunction": {
+            "Description" : "Function to extract lines of text from Textract response",
+            "Value": {     
+                "Fn::Join": ["/",[
+                { 
+                    "Fn::Join": ["#",[
+                    { "Fn::Join": ["?",[
+                        {"Fn::Join": ["/",["https:", "", "console.aws.amazon.com", "lambda", "home"]]},
+                        {"Fn::Join": ["=",["region", {"Ref": "AWS::Region"}]]}
+                    ]]
+                    }, "/functions"]]
+                },{"Ref": "TextractPostProcessTextFunction"}]]            
+            }
+        },  
+        "TextractDocumentAnalysisResultRetrievalFunction": {
+            "Description" : "Function to query DynamoDB, behind API and retrieve document analysis results",
+            "Value": {     
+                "Fn::Join": ["/",[
+                { 
+                    "Fn::Join": ["#",[
+                    { "Fn::Join": ["?",[
+                        {"Fn::Join": ["/",["https:", "", "console.aws.amazon.com", "lambda", "home"]]},
+                        {"Fn::Join": ["=",["region", {"Ref": "AWS::Region"}]]}
+                    ]]
+                    }, "/functions"]]
+                },{"Ref": "TextractDocumentAnalysisResultRetrievalFunction"}]]            
+            }
+        },  
+        "TextractTextDetectionResultRetrievalFunction": {
+            "Description" : "Function to query DynamoDB, behind API and retrieve text detection results",
+            "Value": {     
+                "Fn::Join": ["/",[
+                { 
+                    "Fn::Join": ["#",[
+                    { "Fn::Join": ["?",[
+                        {"Fn::Join": ["/",["https:", "", "console.aws.amazon.com", "lambda", "home"]]},
+                        {"Fn::Join": ["=",["region", {"Ref": "AWS::Region"}]]}
+                    ]]
+                    }, "/functions"]]
+                },{"Ref": "TextractTextDetectionResultRetrievalFunction"}]]            
+            }
+        }                                                
     }            
 }
