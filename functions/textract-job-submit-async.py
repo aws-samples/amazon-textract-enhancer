@@ -130,6 +130,11 @@ def submitDocumentAnalysisJob(bucket, document, tokenPrefix, retryInterval, maxR
     document_name = document[document.rfind("/")+1:document.rfind(".")] if document.find("/") >= 0 else document[:document.rfind(".")]
     document_type = document[document.rfind(".")+1:].upper()
 
+    print("DocumentAnalysisJob: ClientRequestToken = {}-{}".format(tokenPrefix, document.replace("/","_").replace(".","-")))
+    print("DocumentAnalysisJob: DocumentLocation = 'S3Object': 'Bucket': {}, 'Name': {}".format(bucket, document))
+    print("DocumentAnalysisJob: NotificationChannel = 'SNSTopicArn': {},'RoleArn': {}".format(topicArn, roleArn))
+    print("DocumentAnalysisJob: JobTag = {}-{}".format(tokenPrefix, document[document.rfind("/")+1:document.rfind(".")]))
+            
     #Submit Document Anlysis job to Textract to extract text features    
     while retryCount >= 0 and retryCount < maxRetryAttempt:
         try:
@@ -146,8 +151,10 @@ def submitDocumentAnalysisJob(bucket, document, tokenPrefix, retryInterval, maxR
             
             print("Starting Document Analysis Job: {}".format(jobId))        
         except Exception as e:
-            print(e)
-            if retryCount < maxRetryAttempt - 1:
+            print(e.response['Error'])
+            if e.response['Error']['Code'] == 'InvalidParameterException':
+                return {'Operation': 'DocumentAnalysis', 'Error': e.response['Error']['Code']}
+            elif retryCount < maxRetryAttempt - 1:
                 retryCount = retryCount + 1
                 print("Job submission failed, retrying after {} seconds".format(retryInterval))            
                 time.sleep(retryInterval)
@@ -249,6 +256,11 @@ def submitTextDetectionJob(bucket, document, tokenPrefix, retryInterval, maxRetr
     document_name = document[document.rfind("/")+1:document.rfind(".")] if document.find("/") >= 0 else document[:document.rfind(".")]
     document_type = document[document.rfind(".")+1:].upper()
 
+    print("TextDetectionsJob: ClientRequestToken = {}-{}".format(tokenPrefix, document.replace("/","_").replace(".","-")))
+    print("TextDetectionJob: DocumentLocation = 'S3Object': 'Bucket': {}, 'Name': {}".format(bucket, document))
+    print("TextDetectionJob: NotificationChannel = 'SNSTopicArn': {},'RoleArn': {}".format(topicArn, roleArn))
+    print("TextDetectionJob: JobTag = {}-{}".format(tokenPrefix, document[document.rfind("/")+1:document.rfind(".")]))
+    
     #Submit Text Detection job to Textract to detect lines of text    
     while retryCount >= 0 and retryCount < maxRetryAttempt:
         try:
@@ -265,8 +277,10 @@ def submitTextDetectionJob(bucket, document, tokenPrefix, retryInterval, maxRetr
             print("Starting Text Detection Job: {}".format(jobId))        
 
         except Exception as e:
-            print(e)
-            if retryCount < maxRetryAttempt - 1:
+            print(e.response['Error'])
+            if e.response['Error']['Code'] == 'InvalidParameterException':
+                return {'Operation': 'TextDetection', 'Error': e.response['Error']['Code']}
+            elif retryCount < maxRetryAttempt - 1:
                 retryCount = retryCount + 1
                 print("Job submission failed, retrying after {} seconds".format(retryInterval))            
                 time.sleep(retryInterval)
@@ -387,14 +401,20 @@ def lambda_handler(event, context):
                                                         retryInterval, maxRetryAttempt, 
                                                         documentAnalysisTopicArn, 
                                                         roleArn, table_name)
+    print("DocumentAnalysisResponse = {}".format(documentAnalysisResponse))
 
     textDetectionResponse = submitTextDetectionJob(bucket, document, 
                                                     textDetectionTokenPrefix, 
                                                     retryInterval, maxRetryAttempt, 
                                                     textDetectionTopicArn, 
                                                     roleArn, table_name)
+    print("TextDetectionResponse = {}".format(textDetectionResponse))
+        
     jsonresponse = updateResponse(documentAnalysisResponse, textDetectionResponse, False)
 
+    if 'Error' in jsonresponse:
+        return jsonresponse
+        
     if bucketAccessPolicyArn is not None:
         detachExternalBucketPolicy(bucketAccessPolicyArn, event)
         

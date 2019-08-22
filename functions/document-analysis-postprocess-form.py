@@ -34,8 +34,10 @@ def lambda_handler(event, context):
             textractTimestamp = ""            
             if 'Sns' in record.keys():
                 sns = record['Sns']
+                print(sns)
                 if 'Message' in sns.keys():
                     message = json.loads(sns['Message'])
+                    print(message)
                     textractJobId = message['JobId']
                     print("{} = {}".format("JobId", textractJobId))
                     textractStatus = message['Status']
@@ -66,7 +68,7 @@ def lambda_handler(event, context):
 
                     num_pages, documentBlocks = GetDocumentAnalysisResult(textract, textractJobId) 
 
-            if documentBlocks is not None:
+            if documentBlocks is not None and len(documentBlocks) > 0:
                 print("{} Blocks retrieved".format(len(documentBlocks)))
         
                 #Extract form fields into a Python dictionary by parsing the raw JSON from Textract
@@ -91,10 +93,11 @@ def lambda_handler(event, context):
                             'JobId':{'S':textractJobId},
                             'JobType':{'S':'DocumentAnalysis'}
                         },
-                        ExpressionAttributeNames={"#ff": "FormFiles", "#jct": "JobCompleteTimeStamp", "#nf": "NumFields", "#np": "NumPages"},
-                        UpdateExpression='SET #ff = list_append(#ff, :form_files), #jct = :job_complete, #nf = :num_fields, #np = :num_pages',
+                        ExpressionAttributeNames={"#ff": "FormFiles", "#jst": "JobStatus", "#jct": "JobCompleteTimeStamp", "#nf": "NumFields", "#np": "NumPages"},
+                        UpdateExpression='SET #ff = list_append(#ff, :form_files), #jst = :job_status, #jct = :job_complete, #nf = :num_fields, #np = :num_pages',
                         ExpressionAttributeValues={
                             ":form_files": {"L": [{"S": "{}/{}".format(upload_prefix,json_document)}]},
+                            ":job_status": {"S": textractStatus},
                             ":job_complete": {"N": str(textractTimestamp)},
                             ":num_fields": {"N": str(num_fields)},
                             ":num_pages": {"N": str(num_pages)}
@@ -103,7 +106,23 @@ def lambda_handler(event, context):
                 except Exception as e:
                     print('DynamoDB Insertion Error is: {0}'.format(e))                            
                             
-           
+            else:
+                try:
+                    response = dynamodb.update_item(
+                        TableName=table_name,
+                        Key={
+                            'JobId':{'S':textractJobId},
+                            'JobType':{'S':'DocumentAnalysis'}
+                        },
+                        ExpressionAttributeNames={"#jst": "JobStatus", "#jct": "JobCompleteTimeStamp"},
+                        UpdateExpression='SET #jst = :job_status, #jct = :job_complete',
+                        ExpressionAttributeValues={
+                            ":job_status": {"S": textractStatus},
+                            ":job_complete": {"N": str(textractTimestamp)}
+                        }
+                    )
+                except Exception as e:
+                    print('DynamoDB Insertion Error is: {0}'.format(e))                 
             s3_result = s3.meta.client.list_objects_v2(Bucket=bucket, Prefix="{}/".format(upload_prefix), Delimiter = "/")
             if 'Contents' in s3_result:
                 

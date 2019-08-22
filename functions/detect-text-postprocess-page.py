@@ -66,7 +66,7 @@ def lambda_handler(event, context):
 
                     num_pages, documentBlocks = GetTextDetectionResult(textract, textractJobId) 
 
-            if documentBlocks is not None:
+            if documentBlocks is not None and len(documentBlocks) > 0:
                 print("{} Blocks retrieved".format(len(documentBlocks)))
         
                 #Extract lines of texts into a Python dictionary by parsing the raw JSON from Textract
@@ -88,10 +88,11 @@ def lambda_handler(event, context):
                             'JobId':{'S':textractJobId},
                             'JobType':{'S':'TextDetection'}
                         },
-                        ExpressionAttributeNames={"#tf": "TextFiles", "#jct": "JobCompleteTimeStamp", "#nl": "NumLines", "#np": "NumPages"},
-                        UpdateExpression='SET #tf = list_append(#tf, :text_files), #jct = :job_complete, #nl = :num_lines, #np = :num_pages',
+                        ExpressionAttributeNames={"#tf": "TextFiles", "#jst": "JobStatus", "#jct": "JobCompleteTimeStamp", "#nl": "NumLines", "#np": "NumPages"},
+                        UpdateExpression='SET #tf = list_append(#tf, :text_files), #jst = :job_status, #jct = :job_complete, #nl = :num_lines, #np = :num_pages',
                         ExpressionAttributeValues={
                             ":text_files": {"L": [{"S": "{}/{}".format(upload_prefix,json_document)}]},
+                            ":job_status": {"S": textractStatus},
                             ":job_complete": {"N": str(textractTimestamp)},
                             ":num_lines": {"N": str(num_lines)},
                             ":num_pages": {"N": str(num_pages)}
@@ -99,8 +100,24 @@ def lambda_handler(event, context):
                     )
                 except Exception as e:
                     print('DynamoDB Insertion Error is: {0}'.format(e))                            
-                            
-           
+            else:
+                try:
+                    response = dynamodb.update_item(
+                        TableName=table_name,
+                        Key={
+                            'JobId':{'S':textractJobId},
+                            'JobType':{'S':'TextDetection'}
+                        },
+                        ExpressionAttributeNames={"#jst": "JobStatus", "#jct": "JobCompleteTimeStamp"},
+                        UpdateExpression='SET #jst = :job_status, #jct = :job_complete',
+                        ExpressionAttributeValues={
+                            ":job_status": {"S": textractStatus},
+                            ":job_complete": {"N": str(textractTimestamp)}
+                        }
+                    )
+                except Exception as e:
+                    print('DynamoDB Insertion Error is: {0}'.format(e))  
+                    
             s3_result = s3.meta.client.list_objects_v2(Bucket=bucket, Prefix="{}/".format(upload_prefix), Delimiter = "/")
             if 'Contents' in s3_result:
                 

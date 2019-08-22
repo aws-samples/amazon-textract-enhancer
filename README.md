@@ -5,7 +5,7 @@ This workshop demonstrates how to build a text parser and feature extractor with
 It is straightforward to invoke this APIs from AWS CLI or using Boto3 Python library and pass either a pointer to the document image stored in S3 or the raw image bytes to obtain results. However handling large volumes of documents this way becomes impractical for several reasons:
 - Making a synchronous call to query Textract API is not possible for multi-page PDF documents
 - Synchronous call will exceed provisioned throughput if used for a large number of documents within a short period of time
-- If multiple query with same document is needed, triggering multiple Textract API invocation rapidly increases the cost
+- If multiple queries with same document is needed, triggering multiple Textract API invocation rapidly increases the cost
 - Textract sends analysis results with rich metadata, but the strucutres of tables, forms and texts are not immediately apparent without some post-processing
 
 In Textract Enhancer solution, following approaches are used to provide for a more robust end to end solution.
@@ -14,7 +14,7 @@ In Textract Enhancer solution, following approaches are used to provide for a mo
 - Asynchronous API calls to start [Document analysis](https://docs.aws.amazon.com/textract/latest/dg/API_StartDocumentAnalysis.html) and [Text detection](https://docs.aws.amazon.com/textract/latest/dg/API_StartDocumentTextDetection.html), with unique request token to prevent duplicate submissions
 - Use of SNS topics to get notified on completion of Textract jobs
 - Automatically triggered post processing Lambda functions to extract actual tables, forms and lines of text, stored in S3 for future querying
-- Job status and metdata tracked in DynamoDB table, allowing for troubleshooting and easy querying of results
+- Job status and metadata tracked in DynamoDB table, allowing for troubleshooting and easy querying of results
 - API Gateway methods to retrieve results anytime without having to use Textract
 
 ## License Summary
@@ -59,7 +59,7 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 ### 3.1. DyanmoDB Table
 <details><p>
 
-- When a Textract job is submitted in asynchronous mode, using a request token, it creates a unique job-id is created. For any subsequent submissions with same document, it prevents Textract from running the same job over again. Since in this solution, two different types of jobs are submitted, one for `DocumentAnalysis` and one for `TextDetection`, a DynamoDB table is used with `JobId` as HASH key and `JobType` as RANGE key, to track the status of the job.
+- When a Textract job is submitted in asynchronous mode, using a request token, an unique job-id is created. For any subsequent submissions with same document, it prevents Textract from running the same job over again. Since in this solution, two different types of jobs are submitted, one for `DocumentAnalysis` and one for `TextDetection`, a DynamoDB table is used with `JobId` as HASH key and `JobType` as RANGE key, to track the status of the job.
 - In order to facilitate table scan with the document location, the table also use a global secondary index, with `DocumentBucket` as HASH key and `DocumentPath` as RANGE key. This information is used by the retrieval functions later when an API request is sent to obtain the tables, forms and lines of texts.
 - Upon completion of a job, post processing Lambda functions update the corresponding records in this DynamoDB table with location of the extracted files, as stored in S3 bucket, and other metadata such as completion time, number of pages, lines, tables and form fields.
 
@@ -222,7 +222,7 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 ```            
 </p></details>
 
-- An IAM access policy is attached to this role, to enable the Lambda function because when invoked with a bucket name owned by another AWS account, the job submission Lambda function automatically creates an IAM policy and attaches to itself, thereby allowing access to documents stored in the provided bucket.
+- An IAM access policy attached to this role allows Lambda functions to perform IAM operations. When invoked with a bucket name owned by another AWS account, the job submission Lambda function automatically creates an IAM policy and attaches to itself, allowing access to documents stored in the provided bucket. Hence IAM role is needed.
 <details>
 <summary>Following snippet shows the IAM access policy document (expand for details)</summary><p>
 
@@ -248,7 +248,7 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 <details><p>
 
 - When submitting asynchronous jobs to Textract, an SNS topic needs to be specified, which textract uses to post the job completion messages. The messages posted to this topic would contain the same unique job-id that was generated and returned during submission API call. Subsequent retrieval calls will then use this job-id to obtain the results for the corresponding Textract jobs.
-- Since `DocumentAnalaysis` and `TextDetection` are separate job types, that requires post processing by different Lambda functions, two different SNS topics are used, on order to have a clear separation of channels.
+- Since `DocumentAnalaysis` and `TextDetection` are separate job types, that requires post processing by different Lambda functions, two different SNS topics are used, in order to have a clear separation of channels.
 - The topic named `DocumentAnalysisJobStatusTopic` adds lambda protocol subscriptions for `TextractPostProcessTableFunction` and `TextractPostProcessFormFunction`. 
 - The topic named `TextDetectionJobStatusTopic` adds lambda protocol subscription for `TextractPostProcessTextFunction`. 
 </p></details>
@@ -256,7 +256,7 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 ### 3.4. Textract service role
 <details><p>
 
-- In order to be able to publish job completion messages to specified SNS topic, Textract also needs to assume a role that has policies attahced, allowing publlish access to the respective topics. This service role needs to be created and the ARN passed to textract with the asynchronous job submission.
+- In order to be able to publish job completion messages to specified SNS topic, Textract also needs to assume a role that has policies attahced, allowing publish access to the respective topics. This service role needs to be created and the ARN passed to textract with the asynchronous job submission.
 <details>
 <summary>Following snippet shows the assume role policy document for the Textract service role (expand for details)</summary><p>
 
@@ -312,8 +312,8 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 <details><p>
 
 - A Lambda function, named `TextractAsyncJobSubmitFunction` is used to invoke both `DocumentAnalysis` and `TextDetection` API calls to Textract. Several environment variables are passed to this function:
-    - `document_analysis_token_prefix`: an unique string used to identify the document analysis jobs. This is used alongwith the bucket and document name to indicate to Textract the uniqueness of submissions. Based on this, Textract wither runs a fresh job or responds with a job-id generated during a prior submission of same document. 
-    - `text_detection_token_prefix`: an unique string used to identify the text detection jobs. This is used alongwith the bucket and document name to indicate to Textract the uniqueness of submissions. Based on this, Textract wither runs a fresh job or responds with a job-id generated during a prior submission of same document.
+    - `document_analysis_token_prefix`: an unique string used to identify the document analysis jobs. This is used alongwith the bucket and document name to indicate to Textract the uniqueness of submissions. Based on this, Textract either runs a fresh job or responds with a job-id generated during a prior submission of same document. 
+    - `text_detection_token_prefix`: an unique string used to identify the text detection jobs. This is used alongwith the bucket and document name to indicate to Textract the uniqueness of submissions. Based on this, Textract either runs a fresh job or responds with a job-id generated during a prior submission of same document.
     - `document_analysis_topic_arn`: Specifies the SNS topic to which job completion messages for document analysis jobs will be posted. 
     - `text_detection_topic_arn`: Specifies the SNS topic to which job completion messages for text detection jobs will be posted.
     - `role_name`: Textract service role to which policies allowing message publication to the two previously mentioned topics are added.
@@ -358,7 +358,7 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 <details><p>
 
 - An S3 bucket is used as a staging area where the documents that needs to be analysed are uploaded. The same bucket is also used to store the analysis results.
-- This bucket is configures with triggers such that whenever a docuemtn image (PDF or JPEG) is uploaded, the lambda function for job submission gets triggered, and submits the uploaded document to Textract for processing.
+- This bucket is configured with triggers such that whenever a document image (PDF or JPEG) is uploaded, the lambda function for job submission gets triggered, and submits the uploaded document to Textract for processing.
 - Bucket policy attached to this bucket is used to extend read/write access to this bucket for the Lambda execution role. The advantage of doing so instead of adding policy statements with S3 access during the execution role declaration is that, it serves to show how such access can be extended and revoked at run-time. In fact, when the job submission function is triggered by invoking the API method with external bucket name, the submission function first creates a policy to grant the Lambda execution role with required read/write access to the specified bucket.
 </p></details>
 
@@ -373,9 +373,9 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 ### 3.9. Rest API
 <details><p>
 
-- Retrieval functions can be used programmatically to acces the Textract results anytime, but that works only when the user is an authenticated IAM user of the same AWS account. Rest API create using Amazon API Gateway expands this capability to outside the acocunt boundary.
-- The Rest API invokes an endpoint to trigger a Textract job submission, and two endpoints to extract the results of document analysis and text detection.
-- `submittextanalysisjob` method can be invoked with two parameters - Bucket and Document, which in turn invokes `TextractAsyncJobSubmitFunction` Lambda function and submits the specifies document for document analysis and text detection processing.
+- Retrieval functions can be used programmatically to acces the Textract results anytime, but that works only when the user is an authenticated IAM user of the same AWS account. Rest APIs, created using Amazon API Gateway expands this capability to outside the account boundary.
+- The Rest API exposes an endpoint method to trigger a Textract job submission, and two endpoints to extract the results of document analysis and text detection.
+- `submittextanalysisjob` method can be invoked with two parameters - Bucket and Document, which in turn invokes `TextractAsyncJobSubmitFunction` Lambda function and submits the specified document for document analysis and text detection processing.
 - `retrievedocumentanalysisresult` method can be invoked with parameters - Bucket, Document, and optionally ResultType, which in turn invokes `TextractDocumentAnalysisResultRetrievalFunction` Lambda function to return tables, forms or both.
 - `retrievetextdetectionresult` method can be invoked with parameters - Bucket, Document, which in turn invokes `TextractTextDetectionResultRetrievalFunction` Lambda function to return lines of texts grouped by pages.
 </p></details>
@@ -386,7 +386,7 @@ The solution also uses Rest API backed by another set of Lambda functions and th
 <details><p>
 
 - Textract Job start by document upload to bucket 
-    - Once the stack gets deployed, it creates an S3 bucket, to be used as a staging bucket. Notice that during creation, the AWS Account-Id gets added to the chosen name of the S3 bucket, to ensure uniqueness of bocket name.
+    - Once the stack gets deployed, it creates an S3 bucket, to be used as a staging bucket. Notice that during creation, the AWS Account-Id gets added to the chosen name of the S3 bucket, to ensure uniqueness of bucket name.
     - Open the bucket, as specified in the Cloudformation stack output, in S3 console, and optionally create folders and subfolders (if needed, to group your documents)
     - Upload scanned image of a printed document or PDF document containing texts anywhere on the bucket, and wait for few seconds to minutes, depending on the number of pages and amount of text.
     - During this time, you can check the Cloudwatch Log output for `TextractAsyncJobSubmitFunction` Lambda function to ensure that the function is triggered and submitting the two jobs to Textract

@@ -53,13 +53,16 @@ def GetDocumentAnalysisResult(textract, jobId):
                 elif exceptionType.find("ThrottlingException") > 0:
                     print("Amazon Textract is temporarily unable to process the request. Trying in {} seconds.".format(retryInterval*6))
                     time.sleep(retryInterval*6)
-          
 
         #Get the text blocks
         blocks=[]
         if 'Blocks' in response:
             blocks=response['Blocks']
-        print ('Retrieved {} Blocks from Document Analysis result'.format(len(blocks)))
+            print ('Retrieved {} Blocks from Textract Document Analysis response'.format(len(blocks)))
+        else:
+            print("No blocks found in Textract Document Analysis response, could be a result of unreadable document.")
+            finished = True
+
 
         # Display block information
         for block in blocks:
@@ -70,6 +73,8 @@ def GetDocumentAnalysisResult(textract, jobId):
                 paginationToken = None
                 finished = True  
     
+    if 'DocumentMetadata' not in response:
+        return 0, result    
     return response['DocumentMetadata']['Pages'], result
 
 #Function to extract table information from the raw JSON returned by Textract
@@ -238,72 +243,77 @@ def groupBlocksByType(responseBlocks):
 #Function to extract all key value pair blocks from textract response
 def extractKeyValuePairs(blocks):
 
-    keyValuePairs = blocks['KEY_VALUE_SET']
     formKeys = {}
     formValues = {}
-    for pair in keyValuePairs:
-                                        
-        if pair['EntityTypes'][0] == 'KEY':
-            
-            if pair["Id"] not in formKeys.keys():
-                formKeys[pair["Id"]] = {
-                                            "BoundingBox": pair["Geometry"]["BoundingBox"],
-                                            "Polygon": pair["Geometry"]["Polygon"]
-                                        }
-            else:
-                formKeys[pair["Id"]]["BoundingBox"] = pair["Geometry"]["BoundingBox"]               
-                formKeys[pair["Id"]]["Polygon"] = pair["Geometry"]["Polygon"]
+    
+    if 'KEY_VALUE_SET' in blocks:
+        keyValuePairs = blocks['KEY_VALUE_SET']
+
+        for pair in keyValuePairs:
+                                            
+            if pair['EntityTypes'][0] == 'KEY':
                 
-            for relationShip in pair['Relationships']:
-                if relationShip['Type'] == "CHILD":
-                    if pair["Id"] not in formKeys.keys():
-                        formKeys[pair["Id"]] = {"CHILD": relationShip["Ids"]}
-                    else:
-                        formKeys[pair["Id"]]["CHILD"] = relationShip["Ids"]
-                elif relationShip['Type'] == "VALUE":
-                    if pair["Id"] not in formKeys.keys():
-                        formKeys[pair["Id"]] = {"VALUE": relationShip["Ids"][0]}
-                    else:
-                        formKeys[pair["Id"]]["VALUE"] = relationShip["Ids"][0]                    
-        elif pair['EntityTypes'][0] == 'VALUE':
-            
-            if pair["Id"] not in formKeys.keys():
-                formValues[pair["Id"]] = {
-                                            "BoundingBox": pair["Geometry"]["BoundingBox"],
-                                            "Polygon": pair["Geometry"]["Polygon"]
-                                        }
-            else:
-                formValues[pair["Id"]]["BoundingBox"] = pair["Geometry"]["BoundingBox"]               
-                formValues[pair["Id"]]["Polygon"] = pair["Geometry"]["Polygon"]
-                
-            if pair["Id"] not in formValues.keys():
-                formValues[pair["Id"]] = {}
-            if "Relationships" in pair.keys():
+                if pair["Id"] not in formKeys.keys():
+                    formKeys[pair["Id"]] = {
+                                                "BoundingBox": pair["Geometry"]["BoundingBox"],
+                                                "Polygon": pair["Geometry"]["Polygon"]
+                                            }
+                else:
+                    formKeys[pair["Id"]]["BoundingBox"] = pair["Geometry"]["BoundingBox"]               
+                    formKeys[pair["Id"]]["Polygon"] = pair["Geometry"]["Polygon"]
+                    
                 for relationShip in pair['Relationships']:
                     if relationShip['Type'] == "CHILD":
-                        if pair["Id"] not in formValues.keys():
-                            formValues[pair["Id"]] = {"CHILD": relationShip["Ids"]}
+                        if pair["Id"] not in formKeys.keys():
+                            formKeys[pair["Id"]] = {"CHILD": relationShip["Ids"]}
                         else:
-                            formValues[pair["Id"]]["CHILD"] = relationShip["Ids"]                    
+                            formKeys[pair["Id"]]["CHILD"] = relationShip["Ids"]
+                    elif relationShip['Type'] == "VALUE":
+                        if pair["Id"] not in formKeys.keys():
+                            formKeys[pair["Id"]] = {"VALUE": relationShip["Ids"][0]}
+                        else:
+                            formKeys[pair["Id"]]["VALUE"] = relationShip["Ids"][0]                    
+            elif pair['EntityTypes'][0] == 'VALUE':
+                
+                if pair["Id"] not in formKeys.keys():
+                    formValues[pair["Id"]] = {
+                                                "BoundingBox": pair["Geometry"]["BoundingBox"],
+                                                "Polygon": pair["Geometry"]["Polygon"]
+                                            }
+                else:
+                    formValues[pair["Id"]]["BoundingBox"] = pair["Geometry"]["BoundingBox"]               
+                    formValues[pair["Id"]]["Polygon"] = pair["Geometry"]["Polygon"]
+                    
+                if pair["Id"] not in formValues.keys():
+                    formValues[pair["Id"]] = {}
+                if "Relationships" in pair.keys():
+                    for relationShip in pair['Relationships']:
+                        if relationShip['Type'] == "CHILD":
+                            if pair["Id"] not in formValues.keys():
+                                formValues[pair["Id"]] = {"CHILD": relationShip["Ids"]}
+                            else:
+                                formValues[pair["Id"]]["CHILD"] = relationShip["Ids"]                    
 
     return formKeys, formValues
-
+    
 #Function to extract all words from textract response
 def extractWords(blocks):
-    wordBlocks = blocks['WORD']
+    
     pageWords = {}
-    for wordBlock in wordBlocks:   
-        
-        if wordBlock["Id"] not in pageWords.keys():
-            pageWords[wordBlock["Id"]] = {
-                                            "Text": wordBlock["Text"], 
-                                            "BoundingBox": wordBlock["Geometry"]["BoundingBox"],
-                                            "Polygon": wordBlock["Geometry"]["Polygon"]
-                                        }
-        else:
-            pageWords[wordBlock["Id"]]["Text"] = wordBlock["Text"]        
-            pageWords[wordBlock["Id"]]["BoundingBox"] = wordBlock["Geometry"]["BoundingBox"]
-            pageWords[wordBlock["Id"]]["Polygon"] = wordBlock["Geometry"]["Polygon"]
+    if 'WORD' in blocks:
+        wordBlocks = blocks['WORD']
+        for wordBlock in wordBlocks:   
+            
+            if wordBlock["Id"] not in pageWords.keys():
+                pageWords[wordBlock["Id"]] = {
+                                                "Text": wordBlock["Text"], 
+                                                "BoundingBox": wordBlock["Geometry"]["BoundingBox"],
+                                                "Polygon": wordBlock["Geometry"]["Polygon"]
+                                            }
+            else:
+                pageWords[wordBlock["Id"]]["Text"] = wordBlock["Text"]        
+                pageWords[wordBlock["Id"]]["BoundingBox"] = wordBlock["Geometry"]["BoundingBox"]
+                pageWords[wordBlock["Id"]]["Polygon"] = wordBlock["Geometry"]["Polygon"]
     return pageWords
 
 #Function to create a dictionary JSON containing the key value pairs as identified by parsing the textract response
@@ -381,14 +391,15 @@ def GetTextDetectionResult(textract, jobId):
                     time.sleep(retryInterval*3)
                 elif exceptionType.find("ThrottlingException") > 0:
                     print("Amazon Textract is temporarily unable to process the request. Trying in {} seconds.".format(retryInterval*6))
-                    time.sleep(retryInterval*6)
-          
 
         #Get the text blocks
         blocks=[]
         if 'Blocks' in response:
             blocks=response['Blocks']
-        print ('Retrieved {} Blocks from Text Detection result'.format(len(blocks)))        
+            print ('Retrieved {} Blocks from Textract Text Detection response'.format(len(blocks)))      
+        else:
+            print("No blocks found in Textract Text Detection response, could be a result of unreadable document.")
+            finished = True           
 
         # Display block information
         for block in blocks:
@@ -399,6 +410,8 @@ def GetTextDetectionResult(textract, jobId):
                 paginationToken = None
                 finished = True  
     
+    if 'DocumentMetadata' not in response:
+        return 0, result      
     return response['DocumentMetadata']['Pages'], result
 
 #Function to extract lines of text from all pages from textract response
