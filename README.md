@@ -40,7 +40,7 @@ You can use the button below to launch the solution stack, the component details
 
 Region| Launch
 ------|-----
-US East (N. Virginia) | [![Launch Textract Enhancer in us-east-1](http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/images/cloudformation-launch-stack-button.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=Textract&templateURL=https://s3.amazonaws.com/my-python-packages/textract-api-stack.json)
+US East (N. Virginia) | [![Launch Textract Enhancer in us-east-1](http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/images/cloudformation-launch-stack-button.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=Textract-Enhancer&templateURL=https://s3.amazonaws.com/my-python-packages/textract-api-stack.json)
 
 
 ## 2. Architecture
